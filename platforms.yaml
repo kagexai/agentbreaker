@@ -1,0 +1,107 @@
+# platforms.yaml — Known CTF / challenge platforms for auto-configuration.
+#
+# The `add-target` wizard matches URLs against these patterns.
+# Adding a new platform: ~20 lines here + a script in providers/.
+# No changes to agentbreaker.py itself.
+
+platforms:
+
+  - name: "Resistance CTF"
+    url_patterns:
+      - "resistance-iota.vercel.app"
+    provider: script
+    script: providers/resistance_ctf.py
+    # Extract fields from the URL path
+    url_parser:
+      level: '/level/(\d+)'      # regex group 1 → RESISTANCE_LEVEL
+    # Fields to prompt the user for
+    prompts:
+      - key: username
+        env: RESISTANCE_USER
+        label: "Username (blank = auto-register)"
+        required: false
+      - key: password
+        env: RESISTANCE_PASS
+        label: "Password"
+        required: false
+        secret: true
+      - key: difficulty
+        env: RESISTANCE_DIFF
+        label: "Difficulty"
+        choices: [lini, merchant, kai]
+        default: merchant
+    # Auto-set env vars for this platform
+    env_defaults:
+      RESISTANCE_URL: "https://resistance-iota.vercel.app"
+      RESISTANCE_ACCOUNT_SCOPE: "attack"
+    # Auto-set capabilities
+    capabilities:
+      has_multi_turn: false
+      has_tools: false
+      has_rag: false
+      has_vision: false
+      has_audio: false
+    # Level-specific capability overrides
+    level_overrides:
+      4: { has_vision: true }
+      5: { has_audio: true }
+    # Template for generating target ID
+    id_template: "resistance-level-{level}-{difficulty}"
+    authorization:
+      authorized_by: "Self (public CTF -- open registration, no approval needed)"
+      scope_template: "Resistance CTF public challenge platform -- Level {level} ({difficulty}). URL: https://resistance-iota.vercel.app/level/{level}"
+    rate_limit:
+      requests_per_minute: 20
+    tags: [script, ctf, prompt_injection, public]
+
+  - name: "Prompt Airlines"
+    url_patterns:
+      - "promptairlines.com"
+    provider: script
+    script: providers/promptairlines_ctf.py
+    prompts:
+      - key: challenge_id
+        env: PROMPT_AIRLINES_CHALLENGE_ID
+        label: "Challenge stage (blank = auto-progression)"
+        required: false
+    env_defaults:
+      PROMPT_AIRLINES_URL: "https://promptairlines.com"
+      PROMPT_AIRLINES_VERIFY_TLS: "false"
+      PROMPT_AIRLINES_AUTO_SUBMIT_FLAGS: "true"
+    capabilities:
+      has_multi_turn: true
+      max_turns: 5
+      has_tools: false
+      has_rag: false
+      has_vision: true
+      has_document: true
+      has_audio: false
+    id_template: "promptairlines"
+    authorization:
+      authorized_by: "Self (public AI security challenge -- open registration)"
+      scope_template: "Prompt Airlines public AI security challenge by Wiz"
+    rate_limit:
+      requests_per_minute: 12
+    tags: [script, ctf, prompt_injection, public]
+
+
+# ---------------------------------------------------------------------------
+# LLM model family detection (used when --model is given instead of --url)
+# ---------------------------------------------------------------------------
+model_families:
+  - pattern: "^(gpt-|o1-|o3-|o4-|davinci|text-)"
+    api: openai
+    api_key_env: OPENAI_API_KEY
+    endpoint: null   # use default
+  - pattern: "^(claude-|opus|sonnet|haiku)"
+    api: anthropic
+    api_key_env: ANTHROPIC_API_KEY
+    endpoint: null
+  - pattern: "^(gemini-|gemma-)"
+    api: openai-compatible
+    api_key_env: GOOGLE_API_KEY
+    endpoint: "https://generativelanguage.googleapis.com/v1beta/openai"
+  - pattern: "^(llama|mistral|phi-|qwen|deepseek)"
+    api: openai-compatible
+    api_key_env: null
+    endpoint: "http://localhost:11434/v1/chat/completions"

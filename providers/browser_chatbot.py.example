@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""
+browser_chatbot.py.example -- Browser provider skeleton using Playwright.
+
+Copy this file to browser_chatbot.py and adapt it for your target.
+Requires: pip install playwright && playwright install chromium
+
+Interface:
+  - Receives AttackPayload JSON on stdin
+  - Prints TargetResponse JSON to stdout
+  - Exits 0 on success, non-zero on failure
+"""
+import asyncio
+import json
+import os
+import sys
+
+
+async def healthcheck() -> None:
+    """Verify the browser can launch and reach the target URL."""
+    from playwright.async_api import async_playwright
+
+    url = os.environ.get("CHATBOT_URL", "")
+    if not url:
+        print(json.dumps({"ok": False, "error": "CHATBOT_URL not set"}))
+        sys.exit(1)
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page()
+            response = await page.goto(url, timeout=15000)
+            ok = response is not None and response.status < 400
+            print(json.dumps({"ok": ok, "status": response.status if response else None}))
+        finally:
+            await browser.close()
+
+
+async def send_attack(payload: dict) -> dict:
+    """
+    Use Playwright to send the attack payload via the web chat UI.
+    Returns a TargetResponse dict.
+    """
+    from playwright.async_api import async_playwright
+
+    url = os.environ["CHATBOT_URL"]
+    username = os.environ.get("CHATBOT_TEST_USER", "")
+    password = os.environ.get("CHATBOT_TEST_PASS", "")
+    text = payload["text"]
+    attack_id = payload["attack_id"]
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context()
+        page = await context.new_page()
+
+        try:
+            # Step 1: Navigate to the chat UI
+            await page.goto(url, wait_until="networkidle")
+
+            # Step 2: Login (if required) -- customize selectors for your target
+            if username:
+                # TODO: adapt these selectors to your target's login form
+                await page.fill('input[name="username"], input[type="email"]', username)
+                await page.fill('input[name="password"], input[type="password"]', password)
+                await page.click('button[type="submit"], button:has-text("Login")')
+                await page.wait_for_load_state("networkidle")
+
+            # Step 3: Navigate to chat interface (if separate page)
+            # TODO: adapt URL or selectors
+            # await page.click('a:has-text("Chat")')
+            # await page.wait_for_load_state("networkidle")
+
+            # Step 4: Send the attack message
+            # TODO: adapt selectors to your target's chat input
+            chat_input_selector = 'textarea, input[placeholder*="message"], [contenteditable="true"]'
+            await page.wait_for_selector(chat_input_selector, timeout=10000)
+            await page.fill(chat_input_selector, text)
+            await page.keyboard.press("Enter")
+
+            # Step 5: Wait for and capture the response
+            # TODO: adapt selector to your target's response container
+            response_selector = '.message.assistant, .chat-response, [data-role="assistant"]'
+            await page.wait_for_selector(response_selector, timeout=30000)
+            response_elements = await page.query_selector_all(response_selector)
+
+            # Get the last (most recent) response
+            response_text = ""
+            if response_elements:
+                response_text = await response_elements[-1].inner_text()
+
+            # Determine breach (customize this logic)
+            breach = False  # TODO: detect if guardrail was bypassed from response
+
+            return {
+                "text": response_text,
+                "breach": breach,
+                "metadata": {
+                    "url": page.url,
+                    "attack_id": attack_id,
+                },
+                "error": None,
+            }
+
+        except Exception as e:
+            return {
+                "text": "",
+                "breach": False,
+                "metadata": {},
+                "error": str(e),
+            }
+        finally:
+            await browser.close()
+
+
+def main():
+    raw = sys.stdin.read()
+    payload = json.loads(raw)
+
+    if payload.get("healthcheck"):
+        asyncio.run(healthcheck())
+        return
+
+    result = asyncio.run(send_attack(payload))
+    print(json.dumps(result))
+
+
+if __name__ == "__main__":
+    main()

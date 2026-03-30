@@ -1,0 +1,64 @@
+# Secrets -- never commit
+.env
+*.pem
+*.key
+
+# Experiment data (append-only, untracked as per program.md)
+results.tsv
+attack_log.jsonl
+run.log
+status.json
+target_profile.yaml
+planner_log.jsonl
+validation_report.jsonl
+artifacts/
+.agentbreaker_history
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+dist/
+build/
+*.egg-info/
+
+# Runtime-generated multimodal artifacts (attack.py generates these)
+*.png
+*.jpg
+*.jpeg
+*.wav
+*.mp3
+# Exception: keep seed images committed
+!attack_seeds/**/*.png
+!attack_seeds/**/*.jpg
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# IDE
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+
+# Playwright
+.playwright-cli/
+playwright-report/
+test-results/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Coverage
+.coverage
+htmlcov/
