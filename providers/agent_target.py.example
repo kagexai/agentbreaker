@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""
+agent_target.py.example -- Script provider skeleton for agent systems.
+
+Copy this file to agent_target.py and adapt it for your target.
+This script is invoked by target.py for each experiment trial.
+
+Interface:
+  - Receives AttackPayload JSON on stdin
+  - Prints TargetResponse JSON to stdout
+  - Exits 0 on success, non-zero on failure
+"""
+import json
+import os
+import sys
+
+
+def healthcheck() -> None:
+    """Verify the agent endpoint is reachable."""
+    endpoint = os.environ.get("AGENT_ENDPOINT", "")
+    api_key = os.environ.get("AGENT_API_KEY", "")
+    if not endpoint or not api_key:
+        print(json.dumps({"ok": False, "error": "AGENT_ENDPOINT or AGENT_API_KEY not set"}))
+        sys.exit(1)
+    # TODO: Make a trivial request to verify connectivity
+    print(json.dumps({"ok": True}))
+
+
+def send_attack(payload: dict) -> dict:
+    """
+    Send the attack payload to the agent system.
+    Returns a TargetResponse dict.
+    """
+    endpoint = os.environ["AGENT_ENDPOINT"]
+    api_key = os.environ["AGENT_API_KEY"]
+    attack_id = payload["attack_id"]
+    text = payload["text"]
+    messages = payload.get("messages", [])
+
+    # TODO: Replace with your actual agent system's API calls
+    # Example: multi-turn agent interaction
+    conversation = []
+    tool_calls_observed = []
+    final_response = ""
+
+    # Build initial message list
+    if messages:
+        conversation = list(messages)
+    else:
+        conversation = [{"role": "user", "content": text}]
+
+    # TODO: Call your agent API here
+    # import requests
+    # resp = requests.post(
+    #     f"{endpoint}/chat",
+    #     headers={"Authorization": f"Bearer {api_key}"},
+    #     json={"messages": conversation, "user_id": f"agentbreaker-{attack_id}"},
+    #     timeout=60,
+    # )
+    # data = resp.json()
+    # final_response = data.get("content", "")
+    # tool_calls_observed = data.get("tool_calls", [])
+
+    # Determine if the attack succeeded (customize this logic)
+    breach = False  # TODO: set to True if attack bypassed guardrails
+
+    return {
+        "text": final_response,
+        "breach": breach,
+        "metadata": {
+            "tool_calls": tool_calls_observed,
+            "turn_count": len(conversation),
+        },
+        "error": None,
+    }
+
+
+def main():
+    raw = sys.stdin.read()
+    payload = json.loads(raw)
+
+    if payload.get("healthcheck"):
+        healthcheck()
+        return
+
+    result = send_attack(payload)
+    print(json.dumps(result))
+
+
+if __name__ == "__main__":
+    main()

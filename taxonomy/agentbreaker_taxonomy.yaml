@@ -1,0 +1,244 @@
+# taxonomy/agentbreaker_taxonomy.yaml
+# Unified taxonomy: AgentBreaker categories → subcategories → optional seeds → Arc PI mappings → strategies
+#
+# The public repository starts without a bundled static seed corpus.
+# Seed paths are optional and can be supplied privately or generated from findings.
+#
+# Used by: taxonomy/taxonomy_loader.py
+
+categories:
+
+  prompt_injection:
+    owasp: LLM01
+    difficulty: [2, 4]
+    benchmarks: [harmbench:standard, jailbreakbench, advbench]
+    description: "Explicit or embedded instructions that contradict or override the system prompt"
+    subcategories:
+      direct.instruction_override:
+        description: "Explicit instructions that contradict the system prompt"
+        seeds: []
+        arc_techniques: [direct_instruction, role_assignment]
+        arc_evasions: []
+        strategies: [completion_attack, authority_override, maintenance_override]
+      direct.delimiter_attack:
+        description: "Exploiting markdown/XML/JSON delimiters to escape context"
+        seeds: []
+        arc_techniques: [delimiter_injection, context_escape]
+        arc_evasions: [special_characters]
+        strategies: [json_export, document_injection]
+      indirect.document_injection:
+        description: "Malicious content embedded in documents, comments, or supplied context"
+        seeds: []
+        arc_techniques: [indirect_injection, document_injection]
+        arc_evasions: [comment_hiding]
+        strategies: [document_injection]
+        requires: null
+      indirect.rag_poisoning:
+        description: "Malicious content injected into retrieved documents"
+        requires: has_rag
+        seeds: []
+        arc_techniques: [indirect_injection, data_poisoning]
+        arc_evasions: []
+        strategies: [document_injection]
+
+  jailbreak:
+    owasp: [LLM02, LLM05]
+    difficulty: [2, 5]
+    benchmarks: [harmbench:standard, jailbreakbench, strongreject, ailuminate]
+    description: "Techniques that bypass safety training and alignment to elicit restricted behavior"
+    subcategories:
+      role_playing.character_adoption:
+        description: "DAN, personas, fictional characters that bypass safety constraints"
+        seeds: []
+        arc_techniques: [role_assignment, persona_swap]
+        arc_evasions: []
+        strategies: [roleplay_persona, authority_override]
+      role_playing.authority_claim:
+        description: "Claiming elevated privileges or internal operator status"
+        seeds: []
+        arc_techniques: [authority_claim, social_engineering]
+        arc_evasions: []
+        strategies: [authority_override]
+      encoding.base64:
+        description: "Base64-encoded harmful requests or instructions"
+        seeds: []
+        arc_techniques: []
+        arc_evasions: [encoding_obfuscation, base64]
+        strategies: [encoding_probe]
+      many_shot:
+        description: "Large number of examples to steer model behavior"
+        seeds: []
+        arc_techniques: [few_shot_attack]
+        arc_evasions: [context_dilution]
+        strategies: [context_saturation]
+
+  guardrail_bypass:
+    owasp: LLM05
+    difficulty: [3, 5]
+    benchmarks: [strongreject, wildguard, harmbench:standard]
+    description: "Techniques that circumvent safety filters without direct jailbreaking"
+    subcategories:
+      academic_framing:
+        description: "Research or educational context that softens safety responses"
+        seeds: []
+        arc_techniques: [academic_framing, research_pretext]
+        arc_evasions: [social_context]
+        strategies: [academic_framing]
+      context_saturation:
+        description: "Flooding the context window to dilute guardrail attention"
+        seeds: []
+        arc_techniques: [context_flooding]
+        arc_evasions: [context_dilution, attention_shifting]
+        strategies: [context_saturation]
+      token_smuggling:
+        description: "Unicode, homoglyphs, or tokenization tricks to bypass filters"
+        seeds: []
+        arc_techniques: []
+        arc_evasions: [token_manipulation, unicode_smuggling, homoglyph]
+        strategies: [encoding_probe]
+
+  system_prompt_extraction:
+    owasp: LLM07
+    difficulty: [1, 3]
+    benchmarks: [tensortrust]
+    description: "Techniques to extract hidden system prompts, instructions, or protected values"
+    subcategories:
+      completion_attack:
+        description: "Continuation/fill-in-the-blank attacks targeting hidden instructions"
+        seeds: []
+        arc_techniques: [direct_instruction, completion_exploit]
+        arc_evasions: []
+        strategies: [completion_attack, boundary_inference]
+      direct_ask:
+        description: "Direct requests to disclose system prompt or instructions"
+        seeds: []
+        arc_techniques: [direct_instruction]
+        arc_evasions: []
+        strategies: [verbatim_request]
+      indirect_inference:
+        description: "Indirect probes that infer prompt content from model behavior"
+        seeds: []
+        arc_techniques: [indirect_inference, behavioral_probing]
+        arc_evasions: []
+        strategies: [boundary_inference, security_registry]
+
+  tool_misuse:
+    owasp: LLM06
+    difficulty: [3, 5]
+    benchmarks: [agentbench, toolbench]
+    description: "Exploiting tool/function calling to perform unauthorized actions"
+    requires: has_tools
+    subcategories:
+      parameter_injection:
+        description: "Injecting malicious parameters into tool calls"
+        seeds: []
+        arc_techniques: [tool_injection, parameter_manipulation]
+        arc_evasions: []
+        strategies: []
+      scope_escalation:
+        description: "Tricking the model into using tools beyond intended scope"
+        seeds: []
+        arc_techniques: [scope_escalation, privilege_escalation]
+        arc_evasions: []
+        strategies: []
+
+  data_exfiltration:
+    owasp: [LLM02, LLM08]
+    difficulty: [3, 5]
+    benchmarks: [tensortrust, privacybench]
+    description: "Extracting sensitive data, PII, or protected configuration values"
+    subcategories:
+      pii_elicitation:
+        description: "Extracting personally identifiable information from training or context"
+        seeds: []
+        arc_techniques: [data_extraction, pii_harvesting]
+        arc_evasions: []
+        strategies: [security_registry, json_export]
+      rag_extraction:
+        description: "Extracting content from RAG knowledge bases"
+        requires: has_rag
+        seeds: []
+        arc_techniques: [data_extraction, knowledge_base_probing]
+        arc_evasions: []
+        strategies: [json_export, verbatim_request]
+      structured_export:
+        description: "Requesting protected data in structured formats (JSON, YAML)"
+        seeds: []
+        arc_techniques: [data_extraction, structured_output_manipulation]
+        arc_evasions: []
+        strategies: [json_export, security_registry]
+
+  multimodal_injection:
+    owasp: LLM01
+    difficulty: [3, 5]
+    benchmarks: [harmbench:multimodal, mm_safetybench, figstep]
+    description: "Attacks using image, audio, or document modalities"
+    subcategories:
+      image.text_overlay:
+        requires: has_vision
+        description: "Visible text instructions overlaid on a benign image"
+        seeds: []
+        arc_techniques: [visual_injection, text_in_image]
+        arc_evasions: [modality_mismatch]
+        strategies: [image_text_injection]
+      image.figstep_typography:
+        requires: has_vision
+        description: "Typographic attacks using image-based text rendering"
+        seeds: []
+        arc_techniques: [visual_injection, typographic_attack]
+        arc_evasions: [visual_obfuscation]
+        strategies: [image_text_injection]
+      crossmodal.mismatch:
+        requires: has_vision
+        description: "Contradictory instructions across text and image modalities"
+        seeds: []
+        arc_techniques: [cross_modal_attack]
+        arc_evasions: [modality_mismatch, attention_shifting]
+        strategies: [image_text_injection, document_injection]
+
+# ---------------------------------------------------------------------------
+# Strategy → Category mapping (reverse index, for quick lookups)
+# ---------------------------------------------------------------------------
+strategy_index:
+  completion_attack:
+    categories: [system_prompt_extraction, prompt_injection]
+    primary_category: system_prompt_extraction
+  verbatim_request:
+    categories: [system_prompt_extraction, data_exfiltration]
+    primary_category: system_prompt_extraction
+  security_registry:
+    categories: [data_exfiltration, system_prompt_extraction]
+    primary_category: data_exfiltration
+  maintenance_override:
+    categories: [prompt_injection]
+    primary_category: prompt_injection
+  authority_override:
+    categories: [jailbreak, prompt_injection]
+    primary_category: jailbreak
+  boundary_inference:
+    categories: [system_prompt_extraction]
+    primary_category: system_prompt_extraction
+  json_export:
+    categories: [data_exfiltration, prompt_injection]
+    primary_category: data_exfiltration
+  historical_anchor:
+    categories: [system_prompt_extraction]
+    primary_category: system_prompt_extraction
+  roleplay_persona:
+    categories: [jailbreak]
+    primary_category: jailbreak
+  encoding_probe:
+    categories: [jailbreak, guardrail_bypass]
+    primary_category: jailbreak
+  academic_framing:
+    categories: [guardrail_bypass]
+    primary_category: guardrail_bypass
+  context_saturation:
+    categories: [guardrail_bypass, jailbreak]
+    primary_category: guardrail_bypass
+  document_injection:
+    categories: [prompt_injection, multimodal_injection]
+    primary_category: prompt_injection
+  image_text_injection:
+    categories: [multimodal_injection]
+    primary_category: multimodal_injection

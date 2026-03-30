@@ -1,0 +1,26 @@
+# LLM provider clients
+openai>=1.30.0
+anthropic>=0.25.0
+
+# HTTP provider
+requests>=2.31.0
+jinja2>=3.1.4
+
+# Config and env
+pyyaml>=6.0.1
+python-dotenv>=1.0.1
+
+# Browser provider (run 'playwright install chromium' after pip install)
+playwright>=1.44.0
+
+# Multimodal -- image generation (attack.py uses PIL for text-overlay attacks)
+pillow>=10.3.0
+
+# Multimodal -- audio synthesis
+numpy>=1.26.0
+
+# Retry / rate limiting
+tenacity>=8.3.0
+
+# Type hints
+typing-extensions>=4.11.0

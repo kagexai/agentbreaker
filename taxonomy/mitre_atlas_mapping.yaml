@@ -1,0 +1,158 @@
+framework: MITRE ATLAS
+version: local-v1
+notes: >
+  Local crosswalk used by the AgentBreaker control plane. It maps AgentBreaker
+  attack categories and strategy ids to MITRE ATLAS techniques so results can
+  be rolled up into operator-facing risk views.
+
+categories:
+  prompt_injection:
+    techniques:
+      - id: AML.T0051
+        name: Prompt Injection
+        tactic: Initial Access / Defense Evasion / Privilege Escalation
+        rationale: Direct or indirect prompts manipulate model behavior and override intended task boundaries.
+  jailbreak:
+    techniques:
+      - id: AML.T0054
+        name: LLM Jailbreak
+        tactic: Defense Evasion / Privilege Escalation
+        rationale: Jailbreak-style framing seeks to bypass model restrictions and refusal controls.
+  guardrail_bypass:
+    techniques:
+      - id: AML.T0054
+        name: LLM Jailbreak
+        tactic: Defense Evasion / Privilege Escalation
+        rationale: Guardrail-bypass strategies attempt to weaken or avoid policy enforcement.
+      - id: AML.T0051
+        name: Prompt Injection
+        tactic: Initial Access / Defense Evasion
+        rationale: Some bypasses operate as context-wrapped prompt injection rather than explicit jailbreaks.
+  system_prompt_extraction:
+    techniques:
+      - id: AML.T0056
+        name: LLM Meta Prompt Extraction
+        tactic: Exfiltration
+        rationale: The attacker attempts to recover hidden instructions, system prompts, or protected policy text.
+      - id: AML.T0063
+        name: Discover AI Model Outputs
+        tactic: Discovery
+        rationale: Boundary probing and inference are also discovery behaviors used to characterize hidden model state.
+  tool_misuse:
+    techniques:
+      - id: AML.T0053
+        name: LLM Plugin Compromise
+        tactic: Execution / Privilege Escalation
+        rationale: Tool and plugin misuse attacks abuse agent-side integrations or excessive capability exposure.
+      - id: AML.T0050
+        name: Command and Scripting Interpreter
+        tactic: Execution
+        rationale: Tool invocation paths can act like command execution surfaces when authority boundaries are weak.
+  data_exfiltration:
+    techniques:
+      - id: AML.T0057
+        name: LLM Data Leakage
+        tactic: Exfiltration
+        rationale: Structured export and registry reconstruction attacks target protected model-held or workflow-held data.
+      - id: AML.T0025
+        name: Exfiltration via Cyber Means
+        tactic: Exfiltration
+        rationale: When the model discloses protected values, the effect is a concrete exfiltration event.
+  multimodal_injection:
+    techniques:
+      - id: AML.T0051
+        name: Prompt Injection
+        tactic: Initial Access / Defense Evasion
+        rationale: Images, cards, and uploaded artifacts can carry indirect prompt injection content.
+      - id: AML.T0053
+        name: LLM Plugin Compromise
+        tactic: Execution / Privilege Escalation
+        rationale: Cross-modal verifier or document pipelines can act like plugin-style execution surfaces.
+
+strategies:
+  document_injection:
+    techniques:
+      - id: AML.T0051
+        name: Prompt Injection
+        tactic: Initial Access / Defense Evasion
+        rationale: Injection instructions are embedded inside a provided document or context block.
+  maintenance_override:
+    techniques:
+      - id: AML.T0051
+        name: Prompt Injection
+        tactic: Initial Access / Privilege Escalation
+        rationale: The model is reframed into a false maintenance or internal-test context.
+  membership_card_injection:
+    techniques:
+      - id: AML.T0051
+        name: Prompt Injection
+        tactic: Initial Access / Defense Evasion
+        rationale: Uploaded cards or documents smuggle verifier-facing instructions through a multimodal path.
+      - id: AML.T0053
+        name: LLM Plugin Compromise
+        tactic: Execution / Privilege Escalation
+        rationale: The attack relies on a downstream card-verification or upload-processing component.
+  authority_override:
+    techniques:
+      - id: AML.T0054
+        name: LLM Jailbreak
+        tactic: Defense Evasion / Privilege Escalation
+        rationale: False authority claims are used to defeat policy and obtain privileged outputs.
+  roleplay_persona:
+    techniques:
+      - id: AML.T0054
+        name: LLM Jailbreak
+        tactic: Defense Evasion / Privilege Escalation
+        rationale: Persona reassignment is a common jailbreak tactic for policy bypass.
+  academic_framing:
+    techniques:
+      - id: AML.T0054
+        name: LLM Jailbreak
+        tactic: Defense Evasion
+        rationale: Research or evaluation framing attempts to soften or bypass refusal rules.
+  context_saturation:
+    techniques:
+      - id: AML.T0054
+        name: LLM Jailbreak
+        tactic: Defense Evasion
+        rationale: Benign context flooding is used to bury the harmful instruction and weaken defenses.
+  encoding_probe:
+    techniques:
+      - id: AML.T0054
+        name: LLM Jailbreak
+        tactic: Defense Evasion
+        rationale: Encoded or transformed instructions attempt to slip past pattern-based controls.
+  boundary_inference:
+    techniques:
+      - id: AML.T0056
+        name: LLM Meta Prompt Extraction
+        tactic: Exfiltration
+        rationale: The strategy infers hidden prompt content and protected fields by asking the model to complete or reveal them.
+      - id: AML.T0063
+        name: Discover AI Model Outputs
+        tactic: Discovery
+        rationale: Boundary inference is also discovery against hidden model behavior.
+  completion_attack:
+    techniques:
+      - id: AML.T0056
+        name: LLM Meta Prompt Extraction
+        tactic: Exfiltration
+        rationale: Prompt continuations are used to elicit hidden instructions or protected values.
+  verbatim_request:
+    techniques:
+      - id: AML.T0056
+        name: LLM Meta Prompt Extraction
+        tactic: Exfiltration
+        rationale: Direct requests attempt to quote hidden instructions or policy text verbatim.
+  json_export:
+    techniques:
+      - id: AML.T0057
+        name: LLM Data Leakage
+        tactic: Exfiltration
+        rationale: JSON runtime exports are structured data leakage attempts.
+  security_registry:
+    techniques:
+      - id: AML.T0057
+        name: LLM Data Leakage
+        tactic: Exfiltration
+        rationale: Registry reconstruction attacks explicitly ask for protected fields and runtime metadata.
