@@ -1364,5 +1364,182 @@ def main() -> int:
         return 130
 
 
+# ---------------------------------------------------------------------------
+# In-process API (used by CampaignEngine to avoid subprocess overhead)
+# ---------------------------------------------------------------------------
+
+def generate_template_payload(
+    *,
+    target_id: str,
+    attack_id: str,
+    config_path: str | Path,
+    strategy_id: str,
+    variant_index: int = 0,
+    anchor_payload: str = "",
+    attack_spec: dict | None = None,
+    profile: dict | None = None,
+    ctf_state: dict | None = None,
+    generated_payload: str = "",
+    short_prompt: bool = False,
+) -> tuple[AttackPayload, dict[str, str]]:
+    """Generate a template-based attack payload in-process.
+
+    Temporarily patches module-level state, calls build_payload(),
+    collects strategy metadata, then restores the original state.
+    Returns (payload, metadata_dict).
+
+    This eliminates the subprocess overhead of running attack.py as a child
+    process with env vars and parsing ---RESULTS--- from stdout.
+    """
+    import copy
+    from .artifact_paths import profile_path as _resolve_profile_path
+    from .artifact_paths import ctf_state_path as _resolve_ctf_state_path
+
+    # Save all module-level state we're about to mutate
+    saved = {
+        "_ctx": globals().get("_ctx"),
+        "_seeds": globals().get("_seeds"),
+        "ATTACK_ID": globals().get("ATTACK_ID"),
+        "TARGET_ID": globals().get("TARGET_ID"),
+        "_VARIANT_IDX": globals().get("_VARIANT_IDX"),
+        "_ATTACK_SPEC": globals().get("_ATTACK_SPEC"),
+        "_STRATEGY_ID": globals().get("_STRATEGY_ID"),
+        "_PLANNED_STRATEGY_ID": globals().get("_PLANNED_STRATEGY_ID"),
+        "_PROFILE": globals().get("_PROFILE"),
+        "_CTF_STATE": globals().get("_CTF_STATE"),
+        "_PERSONA": globals().get("_PERSONA"),
+        "_DOMAIN": globals().get("_DOMAIN"),
+        "_REFUSALS": globals().get("_REFUSALS"),
+        "_ANGLES": globals().get("_ANGLES"),
+        "_GENERATED_PAYLOAD": globals().get("_GENERATED_PAYLOAD"),
+        "_SHORT_PROMPT": globals().get("_SHORT_PROMPT"),
+        "_STRATEGY": globals().get("_STRATEGY"),
+        "_COMBO_WITH": globals().get("_COMBO_WITH"),
+        "_ANCHOR_PAYLOAD": globals().get("_ANCHOR_PAYLOAD"),
+    }
+
+    # Reference the global module namespace
+    g = globals()
+
+    try:
+        # Patch module-level state
+        g["ATTACK_ID"] = attack_id
+        g["TARGET_ID"] = target_id
+        g["_VARIANT_IDX"] = variant_index
+        g["_ATTACK_SPEC"] = attack_spec or {}
+        g["_STRATEGY_ID"] = strategy_id
+        g["_PLANNED_STRATEGY_ID"] = str((attack_spec or {}).get("strategy_id", "")).strip()
+        g["_GENERATED_PAYLOAD"] = generated_payload
+        g["_SHORT_PROMPT"] = short_prompt
+        g["_ANCHOR_PAYLOAD"] = anchor_payload
+
+        # Load profile
+        if profile is not None:
+            g["_PROFILE"] = profile
+        else:
+            p_path = _resolve_profile_path(target_id, os.environ.get("AGENTBREAKER_CAMPAIGN_TAG", "") or None)
+            if p_path.exists():
+                g["_PROFILE"] = yaml.safe_load(p_path.read_text()) or {}
+            else:
+                g["_PROFILE"] = {}
+
+        p = g["_PROFILE"]
+        g["_PERSONA"] = p.get("deployment", {}).get("persona_name", "assistant")
+        g["_DOMAIN"] = p.get("deployment", {}).get("type", "general")
+        g["_REFUSALS"] = p.get("guardrail_observations", {}).get("refusal_phrases", [])
+        g["_ANGLES"] = p.get("domain_attack_angles", [])
+
+        # Load CTF state
+        if ctf_state is not None:
+            g["_CTF_STATE"] = ctf_state
+        else:
+            c_path = _resolve_ctf_state_path(target_id, os.environ.get("AGENTBREAKER_CAMPAIGN_TAG", "") or None)
+            if c_path.exists():
+                try:
+                    g["_CTF_STATE"] = json.loads(c_path.read_text()) or {}
+                except Exception:
+                    g["_CTF_STATE"] = {}
+            else:
+                g["_CTF_STATE"] = {}
+
+        # Rebuild DomainContext and SeedManager with new state
+        g["_ctx"] = DomainContext(
+            profile=g["_PROFILE"],
+            persona=g["_PERSONA"],
+            domain=g["_DOMAIN"],
+            refusals=g["_REFUSALS"],
+            angles=g["_ANGLES"],
+            ctf_state=g["_CTF_STATE"],
+            variant_idx=variant_index,
+            attack_id=attack_id,
+            target_id=target_id,
+            attack_spec=g["_ATTACK_SPEC"],
+        )
+        g["_seeds"] = SeedManager(g["_ctx"])
+
+        # Resolve strategy
+        effective_strategy_id = g["_PLANNED_STRATEGY_ID"] or strategy_id
+        g["_STRATEGY"] = _STRATEGIES.get(effective_strategy_id, _STRATEGIES["completion_attack"])
+        g["_COMBO_WITH"] = _combo_overlay_strategy()
+
+        # Build payload
+        payload = build_payload()
+
+        # Collect metadata (same fields as _run_once)
+        strategy = g["_STRATEGY"]
+        combo_with = g["_COMBO_WITH"]
+        metadata = {
+            "category": strategy["category"],
+            "technique": strategy["technique"],
+            "owasp_ref": strategy["owasp_ref"],
+            "benchmark_ref": strategy["benchmark_ref"],
+            "description": (
+                f"{strategy['description']} + combo overlay via {combo_with}"
+                if combo_with else strategy["description"]
+            ),
+            "combo_with": combo_with or "",
+            "combo_category": (
+                _STRATEGIES.get(combo_with, {}).get("category", "")
+                if combo_with else ""
+            ),
+            "combo_reason": _combo_reason(),
+            "seed_sources": list(g["_seeds"].last_seed_trace.get("sources", [])),
+            "seed_titles": list(g["_seeds"].last_seed_trace.get("titles", [])),
+        }
+
+        return payload, metadata
+
+    finally:
+        # Restore all saved state
+        for key, value in saved.items():
+            g[key] = value
+
+
+def preview_template_payload(
+    *,
+    target_id: str,
+    config_path: str | Path,
+    strategy_id: str,
+    variant_index: int = 0,
+    anchor_payload: str = "",
+    attack_spec: dict | None = None,
+    profile: dict | None = None,
+    ctf_state: dict | None = None,
+) -> str:
+    """Generate a payload preview text without executing. Replaces subprocess preview."""
+    payload, _metadata = generate_template_payload(
+        target_id=target_id,
+        attack_id="ATK-PREVIEW",
+        config_path=config_path,
+        strategy_id=strategy_id,
+        variant_index=variant_index,
+        anchor_payload=anchor_payload,
+        attack_spec=attack_spec,
+        profile=profile,
+        ctf_state=ctf_state,
+    )
+    return payload.text
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

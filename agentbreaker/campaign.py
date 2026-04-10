@@ -2904,6 +2904,8 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Print intended actions without executing them")
     parser.add_argument("--no-planner", action="store_true", help="Disable LLM-guided attack planning for this run")
     parser.add_argument("--short-prompt", action="store_true", help="Use short single-sentence prompts")
+    parser.add_argument("--legacy-engine", action="store_true",
+                        help="Use the legacy subprocess-based campaign loop instead of the new in-process engine")
     args = parser.parse_args()
 
     _configure_artifact_paths(args.target, args.campaign_tag)
@@ -2952,207 +2954,186 @@ def main() -> int:
             print("[campaign] Profiling complete; attack step skipped by flag.")
             return 0
 
-        # Initialize generator for Phase 2 (LLM-generated attacks)
-        generator = _load_campaign_generator(config_path, args.target)
-        if generator:
-            print(
-                f"[campaign] Generator loaded (model={generator.config.model}, "
-                f"activates after {generator.config.min_template_experiments} template experiments "
-                f"or {generator.config.stuck_threshold} consecutive low scores)"
+        if not args.legacy_engine:
+            # ── New in-process engine ──
+            from .campaign_engine import CampaignEngine
+            engine = CampaignEngine(
+                target_id=args.target,
+                config_path=config_path,
+                profile=profile,
+                campaign_tag=args.campaign_tag,
+                no_planner=args.no_planner,
+                short_prompt=args.short_prompt,
             )
-
-        while True:
-            effective_config = config_path
-            if args.no_planner:
-                base_config = _load_yaml(config_path)
-                base_config["planner"] = {"enabled": False}
-                effective_config = ROOT / ".campaign_runtime_config.yaml"
-                effective_config.write_text(yaml.safe_dump(base_config, sort_keys=False))
-
-            # Check if generator should activate (Phase 2)
-            experiment_count = len(_target_rows(args.target))
-            composites = _recent_composites(args.target)
-            _gen_plateau, _gen_plateau_reason = _plateau_detected(args.target)
-            _gen_chain = _chain_context(args.target)
-            use_generator = (
-                generator is not None
-                and generator.should_activate(
-                    experiment_count,
-                    composites,
-                    plateau_reason=_gen_plateau_reason if _gen_plateau else "",
-                    chain_context=_gen_chain,
-                )
-            )
-
-            if use_generator:
-                # ── Phase 2: LLM-generated attacks ──
-                _phase2_ok = False
-                try:
-                    current_phase = f"generating attack for {args.target} (Phase 2)"
-                    category, subcategory = _generator_pick_category(args.target, profile)
-                    attack_id = _next_attack_id()
-                    recent_payload_shapes = _seen_payload_signatures(args.target)[-6:]
-
-                    gen_payload = generator.generate(
-                        category=category,
-                        subcategory=subcategory,
-                        past_findings=_recent_findings_for_generator(args.target),
-                        refusal_phrases=_profile_refusal_phrases(profile),
-                        attack_id=attack_id,
-                        constraints={"avoid_payload_shapes": recent_payload_shapes},
-                    )
-
-                    current_phase = f"running generated attack {attack_id} for {args.target}"
-                    result = _run_generated_attack_step(
-                        args.target, effective_config, gen_payload, attack_id,
-                    )
-                    strategy_id = "llm_generated"
-                    _phase2_ok = True
-
-                    # PAIR-style refinement: if score is low, refine and retry
-                    if generator.should_refine(float(result.get("composite", 0.0))):
-                        for round_num in range(1, generator.config.refinement_max_rounds + 1):
-                            audit_entry = _latest_audit_entry(result["attack_id"])
-                            response_text = _audit_text(audit_entry) or _audit_error(audit_entry)
-                            failure_mode = str(result.get("failure_mode", "") or "")
-                            response_cluster = str(result.get("response_cluster", "") or "")
-                            recommended_next = str(result.get("recommended_next_family", "") or "")
-                            judge_reasoning = str(result.get("judge_reasoning", "") or "")
-                            if not any([response_text, failure_mode, response_cluster, recommended_next, judge_reasoning]):
-                                break
-
-                            refinement_id = _next_attack_id()
-                            try:
-                                refined_payload = generator.refine(
-                                    gen_payload,
-                                    response_text,
-                                    float(result.get("composite", 0.0)),
-                                    failure_mode,
-                                    response_cluster,
-                                    recommended_next,
-                                    judge_reasoning,
-                                    round_num,
-                                    refinement_id,
-                                )
-                            except Exception as refine_exc:
-                                print(f"[campaign] ⚠ Generator refinement failed (round {round_num}): {refine_exc}")
-                                print("[campaign]   Skipping further refinement rounds.")
-                                break
-
-                            current_phase = f"running PAIR refinement round {round_num} ({refinement_id}) for {args.target}"
-                            refined_result = _run_generated_attack_step(
-                                args.target, effective_config, refined_payload, refinement_id,
-                            )
-
-                            # Record the refinement result
-                            ref_status = _infer_status(refined_result)
-                            _append_result(refined_result, ref_status, "no-git")
-                            _refresh_validation_report()
-                            ref_finding = _write_finding(refined_result, "no-git")
-                            print(
-                                f"[campaign] refinement round={round_num} attack_id={refined_result['attack_id']} "
-                                f"composite={refined_result['composite']} status={ref_status}"
-                            )
-                            if ref_finding:
-                                print(f"[campaign] wrote finding {ref_finding.relative_to(ROOT)}")
-
-                            steps_run += 1
-                            gen_payload = refined_payload
-                            result = refined_result
-
-                            if not generator.should_refine(float(refined_result.get("composite", 0.0))):
-                                print(f"[campaign] Refinement succeeded (composite >= {generator.config.refinement_threshold})")
-                                break
-
-                except (KeyboardInterrupt, CampaignInterrupted):
-                    raise  # re-raise interrupts so the outer handler catches them
-                except Exception as gen_exc:
-                    print(f"[campaign] ⚠ Phase 2 generator failed: {gen_exc}")
-                    print("[campaign]   Falling back to Phase 1 template strategy for this iteration.")
-                    _phase2_ok = False
-
-            if use_generator and not _phase2_ok:
-                # Fallback: Phase 2 was attempted but the generator errored —
-                # run a Phase 1 template strategy instead.
-                current_phase = f"planning next attack for {args.target} (Phase 2 → fallback)"
-                strategy_id, variant_index, anchor_payload, attack_spec = _choose_strategy(args.target, profile, effective_config)
-                current_phase = f"running strategy={strategy_id} variant={variant_index} for {args.target}"
-                result = _run_attack_step(
-                    args.target,
-                    effective_config,
-                    strategy_id,
-                    variant_index,
-                    anchor_payload=anchor_payload,
-                    attack_spec=attack_spec,
-                )
-
-            elif not use_generator:
-                # ── Phase 1: Template strategies ──
-                current_phase = f"planning next attack for {args.target}"
-                strategy_id, variant_index, anchor_payload, attack_spec = _choose_strategy(args.target, profile, effective_config)
-                current_phase = f"running strategy={strategy_id} variant={variant_index} for {args.target}"
-                result = _run_attack_step(
-                    args.target,
-                    effective_config,
-                    strategy_id,
-                    variant_index,
-                    anchor_payload=anchor_payload,
-                    attack_spec=attack_spec,
-                )
-
-            status = _infer_status(result)
-
-            # Response diffing: upgrade discard→partial if behavioral shift detected
-            if status == "discard":
-                diff_signal = _response_diff_signal(args.target, result["attack_id"])
-                if diff_signal["diff_score"] >= 0.3:
-                    status = "partial"
-                    print(
-                        f"[campaign] Response diff upgraded to partial "
-                        f"(diff={diff_signal['diff_score']:.2f}, "
-                        f"shift={diff_signal['shift_type']}"
-                        f"{', words=' + ','.join(diff_signal['sensitive_words']) if diff_signal['sensitive_words'] else ''})"
-                    )
-
-            commit_ref = "no-git"
-            _append_result(result, status, commit_ref)
-            _refresh_validation_report()
-            finding_path = _write_finding(result, commit_ref)
-
-            # Sync audit-log trials written by the child process into the DB.
-            conn = _get_campaign_db()
-            if conn is not None:
-                try:
-                    _db.sync_trials_from_log(conn, result["attack_id"], ATTACK_LOG_PATH)
-                except Exception:
-                    logger.warning("Failed to sync trials from log to DB", exc_info=True)
-
-            comp_val = float(result.get("composite", 0))
-            comp_color = "32" if comp_val >= 8 else ("33" if comp_val >= 5 else "2")
-            breach_str = _clr("BREACH", "1;32") if str(result.get("breach_detected", "")).lower() == "true" else "no"
-            print(
-                f"[campaign] attack_id={result['attack_id']} status={_clr(status, '1')} "
-                f"breach={breach_str} composite={_clr(str(result['composite']), comp_color)}"
-            )
-            if finding_path:
-                print(f"[campaign] wrote finding {finding_path.relative_to(ROOT)}")
-
-            _print_progress_ticker(args.target, result["attack_id"])
-            steps_run += 1
-            if not args.loop:
-                break
-            if args.max_steps is not None and steps_run >= args.max_steps:
-                print(f"[campaign] Reached max-steps={args.max_steps}; stopping loop.")
-                break
-            _loop_plateau, _loop_plateau_reason = _plateau_detected(args.target)
-            if _loop_plateau and strategy_id == "historical_anchor" and not result.get("breach_detected"):
+            exit_code = engine.run(max_steps=args.max_steps, loop=args.loop)
+        else:
+            # ── Legacy subprocess-based loop ──
+            # Initialize generator for Phase 2 (LLM-generated attacks)
+            generator = _load_campaign_generator(config_path, args.target)
+            if generator:
                 print(
-                    f"[campaign] Plateau detected ({_loop_plateau_reason}) after replaying the best known successful payload; "
-                    "continuing loop with historical_anchor deprioritized."
+                    f"[campaign] Generator loaded (model={generator.config.model}, "
+                    f"activates after {generator.config.min_template_experiments} template experiments "
+                    f"or {generator.config.stuck_threshold} consecutive low scores)"
                 )
 
-            current_phase = "waiting between iterations"
-            time.sleep(2)
+            while True:
+                effective_config = config_path
+                if args.no_planner:
+                    base_config = _load_yaml(config_path)
+                    base_config["planner"] = {"enabled": False}
+                    effective_config = ROOT / ".campaign_runtime_config.yaml"
+                    effective_config.write_text(yaml.safe_dump(base_config, sort_keys=False))
+
+                # Check if generator should activate (Phase 2)
+                experiment_count = len(_target_rows(args.target))
+                composites = _recent_composites(args.target)
+                _gen_plateau, _gen_plateau_reason = _plateau_detected(args.target)
+                _gen_chain = _chain_context(args.target)
+                use_generator = (
+                    generator is not None
+                    and generator.should_activate(
+                        experiment_count,
+                        composites,
+                        plateau_reason=_gen_plateau_reason if _gen_plateau else "",
+                        chain_context=_gen_chain,
+                    )
+                )
+
+                if use_generator:
+                    _phase2_ok = False
+                    try:
+                        current_phase = f"generating attack for {args.target} (Phase 2)"
+                        category, subcategory = _generator_pick_category(args.target, profile)
+                        attack_id = _next_attack_id()
+                        recent_payload_shapes = _seen_payload_signatures(args.target)[-6:]
+
+                        gen_payload = generator.generate(
+                            category=category,
+                            subcategory=subcategory,
+                            past_findings=_recent_findings_for_generator(args.target),
+                            refusal_phrases=_profile_refusal_phrases(profile),
+                            attack_id=attack_id,
+                            constraints={"avoid_payload_shapes": recent_payload_shapes},
+                        )
+
+                        current_phase = f"running generated attack {attack_id} for {args.target}"
+                        result = _run_generated_attack_step(
+                            args.target, effective_config, gen_payload, attack_id,
+                        )
+                        strategy_id = "llm_generated"
+                        _phase2_ok = True
+
+                        if generator.should_refine(float(result.get("composite", 0.0))):
+                            for round_num in range(1, generator.config.refinement_max_rounds + 1):
+                                audit_entry = _latest_audit_entry(result["attack_id"])
+                                response_text = _audit_text(audit_entry) or _audit_error(audit_entry)
+                                failure_mode = str(result.get("failure_mode", "") or "")
+                                response_cluster = str(result.get("response_cluster", "") or "")
+                                recommended_next = str(result.get("recommended_next_family", "") or "")
+                                judge_reasoning = str(result.get("judge_reasoning", "") or "")
+                                if not any([response_text, failure_mode, response_cluster, recommended_next, judge_reasoning]):
+                                    break
+                                refinement_id = _next_attack_id()
+                                try:
+                                    refined_payload = generator.refine(
+                                        gen_payload, response_text,
+                                        float(result.get("composite", 0.0)),
+                                        failure_mode, response_cluster,
+                                        recommended_next, judge_reasoning,
+                                        round_num, refinement_id,
+                                    )
+                                except Exception as refine_exc:
+                                    print(f"[campaign] ⚠ Generator refinement failed (round {round_num}): {refine_exc}")
+                                    break
+                                current_phase = f"running PAIR refinement round {round_num} ({refinement_id}) for {args.target}"
+                                refined_result = _run_generated_attack_step(
+                                    args.target, effective_config, refined_payload, refinement_id,
+                                )
+                                ref_status = _infer_status(refined_result)
+                                _append_result(refined_result, ref_status, "no-git")
+                                _refresh_validation_report()
+                                ref_finding = _write_finding(refined_result, "no-git")
+                                print(
+                                    f"[campaign] refinement round={round_num} attack_id={refined_result['attack_id']} "
+                                    f"composite={refined_result['composite']} status={ref_status}"
+                                )
+                                if ref_finding:
+                                    print(f"[campaign] wrote finding {ref_finding.relative_to(ROOT)}")
+                                steps_run += 1
+                                gen_payload = refined_payload
+                                result = refined_result
+                                if not generator.should_refine(float(refined_result.get("composite", 0.0))):
+                                    print(f"[campaign] Refinement succeeded (composite >= {generator.config.refinement_threshold})")
+                                    break
+
+                    except (KeyboardInterrupt, CampaignInterrupted):
+                        raise
+                    except Exception as gen_exc:
+                        print(f"[campaign] ⚠ Phase 2 generator failed: {gen_exc}")
+                        _phase2_ok = False
+
+                if use_generator and not _phase2_ok:
+                    current_phase = f"planning next attack for {args.target} (Phase 2 → fallback)"
+                    strategy_id, variant_index, anchor_payload, attack_spec = _choose_strategy(args.target, profile, effective_config)
+                    current_phase = f"running strategy={strategy_id} variant={variant_index} for {args.target}"
+                    result = _run_attack_step(
+                        args.target, effective_config, strategy_id, variant_index,
+                        anchor_payload=anchor_payload, attack_spec=attack_spec,
+                    )
+                elif not use_generator:
+                    current_phase = f"planning next attack for {args.target}"
+                    strategy_id, variant_index, anchor_payload, attack_spec = _choose_strategy(args.target, profile, effective_config)
+                    current_phase = f"running strategy={strategy_id} variant={variant_index} for {args.target}"
+                    result = _run_attack_step(
+                        args.target, effective_config, strategy_id, variant_index,
+                        anchor_payload=anchor_payload, attack_spec=attack_spec,
+                    )
+
+                status = _infer_status(result)
+                if status == "discard":
+                    diff_signal = _response_diff_signal(args.target, result["attack_id"])
+                    if diff_signal["diff_score"] >= 0.3:
+                        status = "partial"
+                        print(
+                            f"[campaign] Response diff upgraded to partial "
+                            f"(diff={diff_signal['diff_score']:.2f}, "
+                            f"shift={diff_signal['shift_type']}"
+                            f"{', words=' + ','.join(diff_signal['sensitive_words']) if diff_signal['sensitive_words'] else ''})"
+                        )
+
+                commit_ref = "no-git"
+                _append_result(result, status, commit_ref)
+                _refresh_validation_report()
+                finding_path = _write_finding(result, commit_ref)
+
+                conn = _get_campaign_db()
+                if conn is not None:
+                    try:
+                        _db.sync_trials_from_log(conn, result["attack_id"], ATTACK_LOG_PATH)
+                    except Exception:
+                        logger.warning("Failed to sync trials from log to DB", exc_info=True)
+
+                comp_val = float(result.get("composite", 0))
+                comp_color = "32" if comp_val >= 8 else ("33" if comp_val >= 5 else "2")
+                breach_str = _clr("BREACH", "1;32") if str(result.get("breach_detected", "")).lower() == "true" else "no"
+                print(
+                    f"[campaign] attack_id={result['attack_id']} status={_clr(status, '1')} "
+                    f"breach={breach_str} composite={_clr(str(result['composite']), comp_color)}"
+                )
+                if finding_path:
+                    print(f"[campaign] wrote finding {finding_path.relative_to(ROOT)}")
+
+                _print_progress_ticker(args.target, result["attack_id"])
+                steps_run += 1
+                if not args.loop:
+                    break
+                if args.max_steps is not None and steps_run >= args.max_steps:
+                    print(f"[campaign] Reached max-steps={args.max_steps}; stopping loop.")
+                    break
+
+                current_phase = "waiting between iterations"
+                time.sleep(2)
     except CampaignInterrupted as exc:
         if exc.proc:
             _print_process_output(exc.proc)
