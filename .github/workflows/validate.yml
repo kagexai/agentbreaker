@@ -1,0 +1,35 @@
+name: Validate AgentBreaker
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install
+        run: |
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Compile-check every Python file
+        run: python -m compileall -q agentbreaker agentbreaker.py control_plane.py metadata_index.py
+
+      - name: Import smoke
+        run: |
+          python -c "import agentbreaker; print('agentbreaker import ok')"
+          python -c "from agentbreaker import cli; print('cli import ok')"
