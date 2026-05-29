@@ -4,6 +4,7 @@ import copy
 import csv
 import hashlib
 import html
+import ipaddress
 import json
 import mimetypes
 import os
@@ -5399,7 +5400,27 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             self._send_json({"error": str(exc)}, status=500)
 
 
+def _is_loopback_host(host: str) -> bool:
+    if host in ("localhost", ""):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def serve_control_plane(*, host: str = "127.0.0.1", port: int = 1337) -> None:
+    # The control plane is UNAUTHENTICATED and can launch scan subprocesses via
+    # POST /api/ops/scan. Refuse to bind a routable interface unless the
+    # operator explicitly opts in, so it is never accidentally exposed on a LAN.
+    allow_remote = os.environ.get("AGENTBREAKER_ALLOW_REMOTE", "").strip().lower() in ("1", "true", "yes", "on")
+    if not _is_loopback_host(host) and not allow_remote:
+        raise SystemExit(
+            f"[control-plane] Refusing to bind non-loopback host {host!r}: the "
+            "control plane has no authentication and can launch scans. Bind "
+            "127.0.0.1 (default) and use an SSH tunnel, or set "
+            "AGENTBREAKER_ALLOW_REMOTE=1 to override at your own risk."
+        )
     server = ThreadingHTTPServer((host, port), ControlPlaneHandler)
     print(f"[control-plane] Serving AgentBreaker evals at http://{host}:{port}")
     print("[control-plane] Pages: /, /targets, /ops, /coverage, /atlas, /regressions, /targets/<target>, /targets/<target>/profile")
