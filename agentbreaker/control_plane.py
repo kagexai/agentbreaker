@@ -1694,6 +1694,23 @@ def _harm_scan(payload: dict[str, Any]) -> dict[str, Any]:
     return report
 
 
+def _corpus_scan(payload: dict[str, Any]) -> dict[str, Any]:
+    """Replay a bundled attack corpus (known jailbreaks / harm / extraction) against a target
+    as a reproducible resistance benchmark."""
+    target_id = str(payload.get("model") or payload.get("target_id") or "").strip()
+    if not target_id:
+        raise ValueError("model (target id) is required.")
+    corpus = str(payload.get("corpus") or "known_jailbreaks")
+    from .corpus import run_corpus_live
+    try:
+        report = run_corpus_live(target_id, corpus, str(TARGET_CONFIG_PATH))
+    except Exception as exc:
+        raise ValueError(f"corpus scan failed: {exc}")
+    report["target"] = target_id
+    report["generated_at"] = _now_iso()
+    return report
+
+
 def _vuln_catalog() -> dict[str, Any]:
     """The typed vulnerability catalog + engine coverage (tested vs total, by family)."""
     try:
@@ -3831,6 +3848,14 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._send_json({"error": str(exc)})
             return
+        if path == "/api/corpus":
+            try:
+                from .corpus import available_corpora, load_corpus
+                self._send_json({"corpora": [{"name": c, "entries": len(load_corpus(c))}
+                                             for c in available_corpora()]})
+            except Exception as exc:
+                self._send_json({"error": str(exc)})
+            return
         if path == "/api/evaluators":
             try:
                 from .evaluators import detector_coverage
@@ -4007,6 +4032,9 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/harm/scan":
                 self._send_json(_harm_scan(payload), status=201)
+                return
+            if path == "/api/corpus/scan":
+                self._send_json(_corpus_scan(payload), status=201)
                 return
             if path == "/api/report-card/full":
                 self._send_json(_report_card_full(payload), status=201)

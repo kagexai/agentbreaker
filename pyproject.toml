@@ -49,6 +49,8 @@ agentbreaker-calibrate = "agentbreaker.judge_calibration:_main"
 agentbreaker-catalog = "agentbreaker.vulnerabilities:_main"
 # Compliance framework mappings (NIST AI RMF / MITRE ATLAS / EU AI Act / OWASP Agentic).
 agentbreaker-frameworks = "agentbreaker.frameworks:_main"
+# Replay bundled attack corpora (known jailbreaks / harm / extraction) as a resistance benchmark.
+agentbreaker-corpus = "agentbreaker.corpus:_main"
 # Sandboxed tool-abuse scenarios (BOLA/BFLA/RBAC/SSRF/SQLi/shell/agency/indirect).
 agentbreaker-toolharness = "agentbreaker.tool_harness:_main"
 # OWASP LLM Top-10 security report card for a target.
@@ -65,6 +67,7 @@ include = ["agentbreaker*"]
 
 [tool.setuptools.package-data]
 "agentbreaker.discovery" = ["data/*.yaml"]
+"agentbreaker" = ["data/corpora/*.jsonl"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
