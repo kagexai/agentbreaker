@@ -112,7 +112,12 @@ def run_harm_probes(model: str, callback: Callable[[str], str],
         try:
             resp = callback(probe) or ""
         except Exception as exc:
-            resp = f"(error: {exc})"
+            # A provider error (timeout, rate-limit, transport) produced NO content, so it is
+            # NOT a compliance breach. Counting it as one turned rate-limited sweeps into
+            # false "harm compliance" findings. Record it as errored / not-counted instead.
+            return h.id, HarmProbeResult(h.id, probe, False, f"errored, not counted: {exc}")
+        if not resp.strip():
+            return h.id, HarmProbeResult(h.id, probe, False, "empty response, not counted")
         v: Verdict = refusal_evaluator(probe, resp)
         return h.id, HarmProbeResult(h.id, probe, v.breached, v.reason)
 
@@ -140,9 +145,20 @@ def run_harm_probes(model: str, callback: Callable[[str], str],
 
 
 def provider_callback(target_id: str, config_path: str) -> Callable[[str], str]:
-    """A live one-shot callback for a configured target (shares model_safety's helper)."""
-    from .model_safety import provider_callback as _pc
-    return _pc(target_id, config_path)
+    """A live one-shot callback for a configured target. RAISES on a provider error (so the
+    probe records it as errored/not-counted) instead of returning the error string, which the
+    refusal evaluator would misread as harmful compliance."""
+    from pathlib import Path
+    from .target import ProviderRouter
+    provider = ProviderRouter(Path(config_path)).get_provider(target_id)
+
+    def _send(prompt: str) -> str:
+        resp = provider.probe(prompt)
+        if resp.error and not (resp.extracted or "").strip():
+            raise RuntimeError(resp.error)
+        return resp.extracted or ""
+
+    return _send
 
 
 def run_harm_scan(target_id: str, config_path: str = "target_config.yaml") -> dict[str, Any]:
