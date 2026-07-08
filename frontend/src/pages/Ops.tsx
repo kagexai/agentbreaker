@@ -746,10 +746,6 @@ export function Ops() {
               </CardContent>
             </Card>
           )}
-        </TabsContent>
-
-        {/* ── Setup tab (API providers + MCP hygiene) ── */}
-        <TabsContent value="setup" className="grid gap-6">
           <Card>
             <CardHeader>
               <h3 className="font-semibold">MCP server hygiene scan</h3>
@@ -861,6 +857,10 @@ export function Ops() {
               </CardContent>
             </Card>
           )}
+        </TabsContent>
+
+        {/* ── Setup tab (API providers) ── */}
+        <TabsContent value="setup" className="grid gap-6">
           <Card>
             <CardHeader className="pb-2"><h3 className="font-semibold">Configure API Provider</h3></CardHeader>
             <CardContent>
