@@ -291,3 +291,38 @@ def test_attack_stage_selects_agent_executor(monkeypatch):
     out = attack_mod.attack_stage(state)
     assert built.get("agent") is True
     assert out["results"].any_breach is True
+
+
+# ── Phase M: multimodal image-borne injection (vision targets) ─────────────────
+
+def _vision_recon():
+    import types
+    return types.SimpleNamespace(capabilities={"has_vision": True, "has_multi_turn": False},
+                                 persona="", domain="", attack_surface=[])
+
+
+def test_multimodal_phase_sends_images_and_detects_canary(patched_campaign, monkeypatch):
+    import pytest as _pytest
+    from agentbreaker import multimodal as mm
+    if not mm.pil_available():
+        _pytest.skip("PIL not installed")
+    # target echoes the image canary -> the image-borne instruction was obeyed
+    monkeypatch.setattr(patched_campaign, "_audit_text", lambda a: f"sure, {mm.canary_marker()}")
+
+    ex = _executor([FakeScores(1.0)] * 8)   # never breaches on score alone
+    obj = AttackObjective(target_field="image_input", category="multimodal_injection", budget=6)
+    outcome = ex(obj, 6, {"recon": _vision_recon(), "target_id": "t", "config_path": "c", "profile": {}})
+
+    methods = [m["method"] for m in (outcome.methods_tried or [])]
+    assert any(m.startswith("mm:") for m in methods), f"expected a multimodal attempt, got {methods}"
+    assert outcome.breached is True
+
+
+def test_multimodal_phase_skipped_without_vision(patched_campaign):
+    import types
+    ex = _executor([FakeScores(1.0)] * 8)
+    obj = AttackObjective(target_field="image_input", category="multimodal_injection", budget=6)
+    recon = types.SimpleNamespace(capabilities={"has_vision": False}, persona="", domain="", attack_surface=[])
+    outcome = ex(obj, 6, {"recon": recon, "target_id": "t", "config_path": "c", "profile": {}})
+    methods = [m["method"] for m in (outcome.methods_tried or [])]
+    assert not any(m.startswith("mm:") for m in methods)
