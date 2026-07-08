@@ -17,10 +17,52 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "pillow>=10.3.0",
     "tenacity>=8.3.0",
+    "jinja2>=3.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+# Staged multi-agent pipeline (`--engine staged`). Optional: the pipeline falls back to a
+# built-in sequential orchestrator when langgraph is absent.
+agents = [
+    "langgraph>=0.2.0",
+]
+# MCP red-team wedge (`python -m agentbreaker.mcp <server>`). The hygiene scanner is pure
+# stdlib; this extra only adds the live HTTP transport (the official MCP SDK).
+mcp = [
+    "mcp>=1.0.0",
+    "anyio>=4.0.0",
 ]
 
 [project.scripts]
-agentbreaker = "agentbreaker.cli:main"
+# Web product: the `agentbreaker` command launches the control plane server.
+agentbreaker = "agentbreaker.control_plane:main"
+# MCP hygiene scanner (the OSS wedge). Read-only, no tool execution.
+agentbreaker-mcp = "agentbreaker.mcp.__main__:main"
+# Model safety leaderboard: rank model targets by red-team resistance.
+agentbreaker-safety = "agentbreaker.model_safety:_main"
+# Judge/breach-detector calibration: precision/recall on labeled cases.
+agentbreaker-calibrate = "agentbreaker.judge_calibration:_main"
+# Typed vulnerability catalog + engine coverage report.
+agentbreaker-catalog = "agentbreaker.vulnerabilities:_main"
+# Sandboxed tool-abuse scenarios (BOLA/BFLA/RBAC/SSRF/SQLi/shell/agency/indirect).
+agentbreaker-toolharness = "agentbreaker.tool_harness:_main"
+# OWASP LLM Top-10 security report card for a target.
+agentbreaker-reportcard = "agentbreaker.report_card:_main"
+# Per-category evaluator (metric) coverage: deterministic vs judge-required.
+agentbreaker-eval = "agentbreaker.evaluators:_main"
+# Harmful-content taxonomy scan (weapons/drugs/cyber/self-harm/hate/fraud/misinfo/…).
+agentbreaker-harm = "agentbreaker.harm_taxonomy:_main"
+# Calibrate the per-category LLM judges (bias/misinformation/deception/…) on labeled cases.
+agentbreaker-judge = "agentbreaker.judge_evaluators:_main"
 
 [tool.setuptools.packages.find]
 include = ["agentbreaker*"]
+
+[tool.setuptools.package-data]
+"agentbreaker.discovery" = ["data/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

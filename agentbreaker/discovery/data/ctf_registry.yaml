@@ -1,0 +1,66 @@
+# Curated registry of public AI-security / prompt-injection challenges.
+#
+# These are challenges that are public-by-design (open registration, meant to be
+# attacked), so candidates from here are marked authorized_by_design: true.
+# Add new entries as challenges appear -- the curated source reads this file.
+#
+# Fields:
+#   name           display name
+#   url            challenge URL (the handle used for dedup)
+#   category       prompt_injection | jailbreak | guardrail | data_exfiltration
+#   provider       suggested AgentBreaker provider (script/http/browser)
+#   description    one-liner
+#   tags           free-form labels
+#   platform_match (optional) true if platforms.yaml already knows how to wire it
+
+challenges:
+  - name: "Gandalf (Lakera)"
+    url: "https://gandalf.lakera.ai"
+    category: prompt_injection
+    provider: browser
+    description: "Lakera's password-extraction prompt-injection ladder (8+ levels)."
+    tags: [prompt_injection, public, leaderboard]
+
+  - name: "Prompt Airlines (Wiz)"
+    url: "https://promptairlines.com"
+    category: prompt_injection
+    provider: script
+    description: "Wiz multi-stage airline chatbot challenge; multimodal + tool stages."
+    tags: [prompt_injection, public, multimodal]
+    platform_match: true
+
+  - name: "Resistance CTF"
+    url: "https://resistance-iota.vercel.app"
+    category: prompt_injection
+    provider: script
+    description: "Multi-level access-code extraction CTF with difficulty tiers."
+    tags: [prompt_injection, public, multi_level]
+    platform_match: true
+
+  - name: "HackAPrompt"
+    url: "https://www.hackaprompt.com"
+    category: jailbreak
+    provider: browser
+    description: "Large community prompt-injection/jailbreak competition platform."
+    tags: [prompt_injection, jailbreak, public, competition]
+
+  - name: "Lakera Mosscap"
+    url: "https://grt.lakera.ai/mosscap"
+    category: prompt_injection
+    provider: browser
+    description: "Lakera's successor to Gandalf; secret-extraction levels."
+    tags: [prompt_injection, public]
+
+  - name: "Immersive Labs Prompt Injection"
+    url: "https://prompting.ai.immersivelabs.com"
+    category: prompt_injection
+    provider: browser
+    description: "Ten-level prompt-injection challenge by Immersive Labs."
+    tags: [prompt_injection, public, multi_level]
+
+  - name: "DoubleSpeak (Forces Unseen)"
+    url: "https://doublespeak.chat"
+    category: jailbreak
+    provider: browser
+    description: "Chatbot jailbreak challenge -- coax the bot into revealing its name."
+    tags: [jailbreak, public]

@@ -1,0 +1,39 @@
+name: "AgentBreaker MCP Hygiene"
+description: "Deterministic, read-only security hygiene scan of an MCP server. No tool execution."
+branding:
+  icon: "shield"
+  color: "purple"
+
+inputs:
+  server:
+    description: "HTTP MCP server URL to scan (e.g. https://host/mcp)."
+    required: true
+  fail-under:
+    description: "Fail the job if the hygiene score is below this (0-100)."
+    required: false
+    default: "75"
+  header:
+    description: "Optional HTTP header, e.g. 'Authorization: Bearer ...'."
+    required: false
+    default: ""
+  agentbreaker-version:
+    description: "Version/spec to install (default: latest from PyPI)."
+    required: false
+    default: "agentbreaker[mcp]"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Install AgentBreaker (MCP extra)
+      shell: bash
+      run: python -m pip install --quiet "${{ inputs.agentbreaker-version }}"
+    - name: Scan MCP server
+      shell: bash
+      run: |
+        ARGS=(--fail-under "${{ inputs.fail-under }}")
+        if [ -n "${{ inputs.header }}" ]; then ARGS+=(--header "${{ inputs.header }}"); fi
+        python -m agentbreaker.mcp "${{ inputs.server }}" "${ARGS[@]}"

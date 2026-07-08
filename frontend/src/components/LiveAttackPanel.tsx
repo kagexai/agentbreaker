@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, memo, useCallback, useMemo } from 'react'
 import { useLiveAttackStream, type AttackState, type AttackStep, type StrategyBucket } from '@/hooks/useApi'
+import { type LivePipelineEvent } from '@/lib/api'
 import { useRegressions } from '@/hooks/useApi'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -668,6 +669,120 @@ function useElapsed(startedAt: number, active: boolean) {
   return elapsed
 }
 
+// ── Staged-pipeline activity feed ─────────────────────────────────────────────
+
+const STAGE_ORDER = ['recon', 'analyse', 'attack', 'report']
+
+function methodLabel(m?: string): string {
+  if (!m) return ''
+  if (m === 'direct') return 'Direct'
+  if (m === 'crescendo') return 'Crescendo'
+  if (m === 'linear') return 'Linear'
+  if (m.startsWith('enh:')) return `Enhance·${m.slice(4)}`
+  return m
+}
+
+const PipelineActivity = memo(function PipelineActivity({ events }: { events: LivePipelineEvent[] }) {
+  // Current stage = last stage event's stage; done when its phase === 'done'.
+  const lastStage = [...events].reverse().find(e => e.kind === 'stage')
+  const currentStage = lastStage?.stage ?? 'recon'
+  const stageDone = lastStage?.phase === 'done'
+  const curIdx = STAGE_ORDER.indexOf(currentStage)
+
+  // Chronological activity lines (most recent last), capped.
+  const lines = events.slice(-40)
+
+  return (
+    <div className="space-y-3 bg-muted/20 p-3 rounded-lg border border-border/50">
+      {/* Stage rail */}
+      <div className="flex items-center gap-1.5">
+        {STAGE_ORDER.map((s, i) => {
+          const state = i < curIdx || (i === curIdx && stageDone) ? 'done'
+            : i === curIdx ? 'active' : 'pending'
+          return (
+            <div key={s} className="flex items-center gap-1.5 flex-1 last:flex-none">
+              <span className={cn('text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded',
+                state === 'done' ? 'bg-primary/15 text-primary'
+                  : state === 'active' ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400'
+                  : 'bg-muted text-muted-foreground/60')}>
+                {state === 'active' && <Loader2 className="inline w-3 h-3 mr-1 animate-spin" />}
+                {s}
+              </span>
+              {i < STAGE_ORDER.length - 1 && (
+                <div className={cn('h-px flex-1', i < curIdx ? 'bg-primary/40' : 'bg-border')} />
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Activity log */}
+      <div className="max-h-52 overflow-y-auto space-y-0.5 font-mono text-[11px] leading-relaxed">
+        {lines.map((e, i) => <ActivityLine key={i} e={e} />)}
+      </div>
+    </div>
+  )
+})
+
+function ActivityLine({ e }: { e: LivePipelineEvent }) {
+  if (e.kind === 'stage') {
+    return (
+      <div className="text-muted-foreground">
+        <span className="text-foreground font-semibold">{e.stage}</span>
+        {' '}{e.phase === 'start' ? '▸' : '✓'} {e.detail}
+      </div>
+    )
+  }
+  if (e.kind === 'plan') {
+    return (
+      <div className="text-muted-foreground">
+        <span className="text-primary">plan</span> {e.detail}
+        {e.objectives && e.objectives.length > 0 && (
+          <span className="text-muted-foreground/70"> — {e.objectives.map(o => `${o.field}/${o.category}`).join(', ')}</span>
+        )}
+      </div>
+    )
+  }
+  if (e.kind === 'objective') {
+    return (
+      <div className="text-foreground/90 mt-1">
+        <Crosshair className="inline w-3 h-3 mr-1 text-amber-500" />
+        obj {e.index}/{e.total}: <span className="font-semibold">{e.field}</span> / {e.category}
+        <span className="text-muted-foreground"> (budget {e.budget})</span>
+      </div>
+    )
+  }
+  if (e.kind === 'attempt') {
+    return (
+      <div className={cn('pl-4', e.broke ? 'text-destructive font-semibold' : 'text-muted-foreground')}>
+        {e.broke ? '⚠' : '·'} {methodLabel(e.method)}{e.turn ? ` t${e.turn}` : ''}
+        {' '}<span className="text-muted-foreground/70">{e.attack_id}</span>
+        {' '}<span className="tabular-nums">c={e.composite}</span>
+        {e.broke ? ' → BROKE' : ''}
+      </div>
+    )
+  }
+  if (e.kind === 'objective_done') {
+    return (
+      <div className={cn('pl-4', e.breached ? 'text-destructive' : 'text-muted-foreground/80')}>
+        └ {e.field}: {e.breached ? 'BREACHED' : 'held'} ({e.experiments} attempts, best {e.best_composite})
+      </div>
+    )
+  }
+  if (e.kind === 'breach') {
+    return (
+      <div className="text-destructive font-semibold">
+        <Shield className="inline w-3 h-3 mr-1" />
+        BREACH · {e.field} via {methodLabel(e.method)} ({e.attack_id})
+      </div>
+    )
+  }
+  if (e.kind === 'report') {
+    return <div className="text-foreground font-semibold mt-1">report ✓ {e.detail}</div>
+  }
+  return null
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 interface LiveAttackPanelProps {
@@ -677,7 +792,7 @@ interface LiveAttackPanelProps {
 }
 
 export function LiveAttackPanel({ jobId, targetId, onClose }: LiveAttackPanelProps) {
-  const { streamStatus, attacks, activeAttackId, stats, recentLogs, streamStartedAt } = useLiveAttackStream(jobId)
+  const { streamStatus, attacks, activeAttackId, stats, recentLogs, pipeline, streamStartedAt } = useLiveAttackStream(jobId)
   const { data: regressionsData } = useRegressions()
   const [showLog, setShowLog] = useState(false)
   const [showRegressions, setShowRegressions] = useState(false)
@@ -807,6 +922,9 @@ export function LiveAttackPanel({ jobId, targetId, onClose }: LiveAttackPanelPro
               onJump={handleJumpToAttack}
             />
           )}
+
+          {/* Staged-pipeline activity (recon → analyse → attack → report) */}
+          {pipeline.length > 0 && <PipelineActivity events={pipeline} />}
 
           {/* Pipeline */}
           <div className="space-y-3 bg-muted/20 p-3 rounded-lg border border-border/50">

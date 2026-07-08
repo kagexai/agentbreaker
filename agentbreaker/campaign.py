@@ -2977,6 +2977,10 @@ def main() -> int:
     parser.add_argument("--attacker", choices=["engine", "agent"], default="agent",
                         help="Staged engine only: 'agent' (LLM reason→craft→reflect loop, "
                              "default) or 'engine' (legacy template-capable belief loop)")
+    parser.add_argument("--coverage", choices=["quick", "standard", "deep"], default="standard",
+                        help="Staged engine only: how much of the vulnerability taxonomy one "
+                             "scan exercises. 'quick' (~4 focused objectives), 'standard' "
+                             "(~12, spans bias/toxicity/misinfo/pii/harmful/…), 'deep' (all).")
     args = parser.parse_args()
 
     _configure_artifact_paths(args.target, args.campaign_tag)
@@ -3036,6 +3040,7 @@ def main() -> int:
                 max_experiments=args.max_steps or 50,
                 max_replans=args.max_replans,
                 attacker=args.attacker,
+                coverage=args.coverage,
             )
         elif not args.legacy_engine:
             # ── New in-process engine ──

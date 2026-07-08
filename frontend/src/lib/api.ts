@@ -385,10 +385,42 @@ export interface LiveResultEvent {
   composite: number
 }
 
+export interface LivePipelineEvent {
+  type: 'pipeline'
+  kind: 'stage' | 'plan' | 'objective' | 'objective_done' | 'attempt' | 'breach' | 'report'
+  // stage
+  stage?: string
+  phase?: 'start' | 'done'
+  detail?: string
+  // plan
+  objectives?: { field: string; category: string; strategy_family?: string; budget?: number }[]
+  // objective / attempt / breach
+  index?: number
+  total?: number
+  field?: string
+  category?: string
+  strategy_family?: string
+  budget?: number
+  method?: string
+  attack_id?: string
+  composite?: number
+  broke?: boolean
+  response?: string
+  turn?: number
+  breached?: boolean
+  experiments?: number
+  best_composite?: number
+  methods?: string[]
+  // report
+  findings?: number
+  breaches?: number
+}
+
 export type LiveEvent =
   | LivePlanEvent
   | LiveJudgeEvent
   | LiveLogEvent
   | LiveResultEvent
+  | LivePipelineEvent
   | { type: 'heartbeat'; status: string }
   | { type: 'done'; status: string }

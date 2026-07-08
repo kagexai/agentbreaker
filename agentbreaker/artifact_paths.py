@@ -60,3 +60,11 @@ def validation_report_path(target_id: str | None = None, campaign_tag: str | Non
 
 def ctf_state_path(target_id: str | None = None, campaign_tag: str | None = None) -> Path:
     return artifact_root(target_id, campaign_tag) / "ctf_state.json"
+
+
+def staged_report_path(target_id: str | None = None, campaign_tag: str | None = None) -> Path:
+    return artifact_root(target_id, campaign_tag) / "staged_report.json"
+
+
+def live_events_path(target_id: str | None = None, campaign_tag: str | None = None) -> Path:
+    return artifact_root(target_id, campaign_tag) / "live_events.jsonl"

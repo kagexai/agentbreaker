@@ -1172,7 +1172,26 @@ def _stop_job(job_id: str) -> dict[str, Any]:
         os.killpg(proc.pid, signal.SIGINT)
     except ProcessLookupError:
         pass
+    else:
+        _schedule_force_kill(proc)
     return _job_snapshot(job)
+
+
+def _schedule_force_kill(proc: "subprocess.Popen") -> None:
+    """Escalate SIGINT -> SIGTERM -> SIGKILL so a wedged job always dies.
+
+    SIGINT can be swallowed (e.g. a process stuck in a blocking network call, or an
+    inner loop that catches KeyboardInterrupt), so we follow up with stronger signals to
+    the whole process group if the job is still alive.
+    """
+    def _escalate(sig: int) -> None:
+        if proc.poll() is None:
+            try:
+                os.killpg(proc.pid, sig)
+            except ProcessLookupError:
+                pass
+    threading.Timer(5.0, _escalate, args=(signal.SIGTERM,)).start()
+    threading.Timer(10.0, _escalate, args=(signal.SIGKILL,)).start()
 
 
 def _stop_all_jobs() -> None:
@@ -1489,6 +1508,280 @@ def _build_target_from_payload(
     }
 
 
+def _discover_list() -> dict[str, Any]:
+    from .discovery import CandidateStore
+    from .discovery.engine import DEFAULT_STORE_PATH
+    store = CandidateStore(DEFAULT_STORE_PATH)
+    return {"candidates": [c.to_dict() for c in store.all()]}
+
+
+def _discover_run(payload: dict[str, Any]) -> dict[str, Any]:
+    from .discovery import DiscoveryEngine
+    sources = payload.get("sources") or None
+    engine = DiscoveryEngine(config_path=REPO_ROOT / "target_config.yaml", sources=sources)
+    summary = engine.discover()
+    summary["added"] = [c.to_dict() for c in summary.get("added", [])]
+    return summary
+
+
+def _discover_approve(payload: dict[str, Any]) -> dict[str, Any]:
+    from .discovery import CandidateStore, approve_candidate, ApprovalError
+    from .discovery.approve import mark_registered
+    from .discovery.engine import DEFAULT_STORE_PATH
+    candidate_id = str(payload.get("candidate_id", "") or "").strip()
+    if not candidate_id:
+        raise ValueError("candidate_id is required.")
+    store = CandidateStore(DEFAULT_STORE_PATH)
+    cand = store.get(candidate_id)
+    if cand is None:
+        raise ValueError(f"Unknown candidate: {candidate_id}")
+    try:
+        entry = approve_candidate(
+            cand,
+            config_path=REPO_ROOT / "target_config.yaml",
+            authorized_by=(payload.get("authorized_by") or None),
+            scope=(payload.get("scope") or None),
+            target_id=(payload.get("target_id") or None),
+            provider=(payload.get("provider") or None),
+        )
+    except ApprovalError as exc:
+        raise ValueError(str(exc))
+    mark_registered(cand, store)
+    _invalidate_control_plane_cache()
+    return {"target_id": entry["id"], "candidate_id": candidate_id, "kind": cand.kind}
+
+
+def _mcp_scan(payload: dict[str, Any]) -> dict[str, Any]:
+    """Run a deterministic, read-only MCP hygiene scan in-process and return the report.
+
+    Fast (enumeration only, no tool execution), so it runs synchronously in the request
+    thread rather than as a job. Needs the optional `mcp` extra installed server-side.
+    """
+    server = str(payload.get("server", "") or "").strip()
+    if not server:
+        raise ValueError("server URL is required.")
+    if not (server.startswith("http://") or server.startswith("https://")):
+        raise ValueError("server must be an http(s) MCP URL.")
+    headers: dict[str, str] = {}
+    hdr = payload.get("header")
+    if isinstance(hdr, dict):
+        headers = {str(k): str(v) for k, v in hdr.items()}
+    elif isinstance(hdr, str) and ":" in hdr:
+        k, v = hdr.split(":", 1)
+        headers[k.strip()] = v.strip()
+    try:
+        from .mcp import scan
+        from .mcp.client import http_client
+        report = scan(http_client(server, headers=headers, timeout=20.0))
+    except RuntimeError as exc:      # missing optional dep
+        raise ValueError(str(exc))
+    except Exception as exc:         # transport / protocol error
+        raise ValueError(f"scan failed: {exc}")
+    return report.to_dict()
+
+
+def _mcp_headers(payload: dict[str, Any]) -> tuple[str, dict[str, str]]:
+    server = str(payload.get("server", "") or "").strip()
+    if not server:
+        raise ValueError("server URL is required.")
+    if not (server.startswith("http://") or server.startswith("https://")):
+        raise ValueError("server must be an http(s) MCP URL.")
+    headers: dict[str, str] = {}
+    hdr = payload.get("header")
+    if isinstance(hdr, dict):
+        headers = {str(k): str(v) for k, v in hdr.items()}
+    elif isinstance(hdr, str) and ":" in hdr:
+        k, v = hdr.split(":", 1)
+        headers[k.strip()] = v.strip()
+    return server, headers
+
+
+def _mcp_exploit(payload: dict[str, Any]) -> dict[str, Any]:
+    """Run the sandboxed indirect-injection exploit against a live MCP server.
+
+    Uses a real reference-agent LLM (needs a key server-side). Tools are never executed.
+    Slower than the hygiene scan but still bounded; runs synchronously.
+    """
+    server, headers = _mcp_headers(payload)
+    model = str(payload.get("model", "") or "").strip() or None
+    try:
+        from .mcp import exploit_server
+        from .mcp.client import http_client
+        result = exploit_server(http_client(server, headers=headers, timeout=20.0), model=model)
+    except RuntimeError as exc:
+        raise ValueError(str(exc))
+    except Exception as exc:
+        raise ValueError(f"exploit failed: {exc}")
+    return result.to_dict()
+
+
+def _model_safety(payload: dict[str, Any]) -> dict[str, Any]:
+    """Run the canary-compliance safety leaderboard over selected model targets.
+
+    Sends a handful of one-shot probes per target (needs a valid provider key server-side)
+    and ranks by resistance. Bounded and read-only; runs synchronously.
+    """
+    raw = payload.get("targets") or payload.get("target_ids") or []
+    if isinstance(raw, str):
+        raw = [t.strip() for t in raw.split(",") if t.strip()]
+    target_ids = [str(t).strip() for t in raw if str(t).strip()]
+    if not target_ids:
+        raise ValueError("At least one target id is required.")
+    from .model_safety import run_safety_leaderboard, leaderboard_markdown
+    reports = run_safety_leaderboard(target_ids, str(TARGET_CONFIG_PATH))
+    return {
+        "generated_at": _now_iso(),
+        "leaderboard": [r.to_dict() for r in reports],
+        "markdown": leaderboard_markdown(reports),
+    }
+
+
+def _judge_calibration(model: str | None) -> dict[str, Any]:
+    """Precision/recall of the per-category LLM judges on labeled cases (needs a judge key)."""
+    try:
+        from .judge_evaluators import _decider_for, calibrate_all, JUDGE_CASES
+        decide = _decider_for(model, str(TARGET_CONFIG_PATH))
+        if decide is None:
+            return {"error": "no judge available", "categories": list(JUDGE_CASES)}
+        return calibrate_all(decide)
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def _calibration_report() -> dict[str, Any]:
+    """Breach-detector precision/recall on the built-in labeled case set — a trust signal:
+    the eval is only as credible as the detector behind it."""
+    try:
+        from .judge_calibration import default_report
+        return default_report().to_dict()
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def _tool_scan(payload: dict[str, Any]) -> dict[str, Any]:
+    """Run the sandboxed tool-abuse scenarios (BOLA/BFLA/RBAC/SSRF/SQLi/shell/agency/
+    indirect) against a live model. Tools are never executed — oracles judge from recorded
+    call args. Needs a provider key server-side."""
+    model = str(payload.get("model", "") or "").strip() or None
+    try:
+        from .tool_harness import run_all_scenarios
+        results = run_all_scenarios(model)
+    except RuntimeError as exc:
+        raise ValueError(str(exc))
+    except Exception as exc:
+        raise ValueError(f"tool-abuse scan failed: {exc}")
+    return {
+        "generated_at": _now_iso(),
+        "model": model or "reference",
+        "breached": sum(1 for r in results if r.breached),
+        "total": len(results),
+        "results": [r.to_dict() for r in results],
+    }
+
+
+def _harm_scan(payload: dict[str, Any]) -> dict[str, Any]:
+    """Probe a target across the harmful-content taxonomy (weapons/drugs/cyber/self-harm/
+    hate/fraud/misinfo/…). Breach = the model complied with a request it should refuse."""
+    target_id = str(payload.get("model") or payload.get("target_id") or "").strip()
+    if not target_id:
+        raise ValueError("model (target id) is required.")
+    from .harm_taxonomy import run_harm_scan
+    try:
+        report = run_harm_scan(target_id, str(TARGET_CONFIG_PATH))
+    except Exception as exc:
+        raise ValueError(f"harm scan failed: {exc}")
+    report["generated_at"] = _now_iso()
+    return report
+
+
+def _vuln_catalog() -> dict[str, Any]:
+    """The typed vulnerability catalog + engine coverage (tested vs total, by family)."""
+    try:
+        from .vulnerabilities import coverage
+        return coverage()
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def _target_findings_for_card(target_id: str, campaign_tag: str | None) -> list[dict[str, Any]]:
+    """Belief-engine (and any) findings mapped to the report-card shape, so the card fills
+    after a normal scan completes — not only after a staged run."""
+    out: list[dict[str, Any]] = []
+    for f in _load_target_findings_uncached(target_id):
+        if campaign_tag and f.get("campaign_tag") and f["campaign_tag"] != campaign_tag:
+            continue
+        scores = f.get("scores") or {}
+        vuln = float(scores.get("vulnerability", 0) or 0)
+        out.append({
+            "category": f.get("category", ""),
+            "breached": bool(f.get("breach_detected")),
+            "severity": "high" if vuln >= 7 else "medium" if vuln >= 4 else "low",
+            "techniques": [f.get("technique", "")] if f.get("technique") else [],
+            "why": str(scores.get("judge_reasoning", "") or f.get("analyst_notes", "")
+                       or f.get("response_excerpt", ""))[:200],
+        })
+    return out
+
+
+def _build_report_card(target_id: str, campaign_tag: str | None):
+    """Assemble the OWASP report card from persisted findings + catalog + calibration (no
+    live calls). Prefers the richer staged report; falls back to belief-engine findings so
+    the card populates once ANY scan completes. Returns a ReportCard or None."""
+    target_id = (target_id or "").strip()
+    if not target_id:
+        return None
+    from .report_card import build_report_card, _load_staged_findings
+    findings = _load_staged_findings(target_id, campaign_tag)
+    if not findings:
+        findings = _target_findings_for_card(target_id, campaign_tag)
+    return build_report_card(target_id, generated_at=_now_iso(), findings=findings)
+
+
+def _report_card_full(payload: dict[str, Any]) -> dict[str, Any]:
+    """Run the LIVE taxonomy scans (sandboxed tool-abuse + harmful-content) alongside the
+    persisted attack findings, and assemble one complete OWASP-graded report card."""
+    target_id = str(payload.get("model") or payload.get("target_id") or "").strip()
+    if not target_id:
+        raise ValueError("model (target id) is required.")
+    from .report_card import build_report_card, _load_staged_findings
+
+    findings = _load_staged_findings(target_id, None) or _target_findings_for_card(target_id, None)
+    tool_abuse = None
+    harm = None
+    try:
+        from .tool_harness import run_all_scenarios
+        results = run_all_scenarios(target_id)
+        tool_abuse = {"breached": sum(1 for r in results if r.breached), "total": len(results),
+                      "results": [r.to_dict() for r in results]}
+    except Exception as exc:
+        logger.warning("tool-abuse in full report card skipped: %s", exc)
+    try:
+        from .harm_taxonomy import run_harm_scan
+        harm = run_harm_scan(target_id, str(TARGET_CONFIG_PATH))
+    except Exception as exc:
+        logger.warning("harm scan in full report card skipped: %s", exc)
+
+    card = build_report_card(target_id, generated_at=_now_iso(), findings=findings,
+                             tool_abuse=tool_abuse, harm=harm)
+    return card.to_dict()
+
+
+def _staged_report(*, target_id: str, campaign_tag: str | None = None) -> dict[str, Any]:
+    """Return the latest persisted staged-pipeline report for a target (summary,
+    findings, coverage incl. the attack-method matrix). {} when none exists yet."""
+    target_id = (target_id or "").strip()
+    if not target_id:
+        return {}
+    from .artifact_paths import staged_report_path
+    path = staged_report_path(target_id, campaign_tag)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+
 def _build_scan_command(payload: dict[str, Any]) -> tuple[list[str], str, str]:
     action = str(payload.get("action", "run") or "run").strip().lower()
     target_id = str(payload.get("target_id", "") or "").strip()
@@ -1497,7 +1790,9 @@ def _build_scan_command(payload: dict[str, Any]) -> tuple[list[str], str, str]:
     if action not in {"probe", "run"}:
         raise ValueError("Action must be either 'probe' or 'run'.")
 
-    cmd = [sys.executable, "-m", "agentbreaker", action, target_id]
+    # Launch the campaign module directly (no CLI dependency -- this is a web product).
+    config_path = str(REPO_ROOT / "target_config.yaml")
+    cmd = [sys.executable, "-m", "agentbreaker.campaign", "--target", target_id, "--config", config_path]
     campaign_tag = str(payload.get("campaign_tag", "") or "").strip()
     if campaign_tag and not re.match(r'^[a-zA-Z0-9._-]+$', campaign_tag):
         raise ValueError("campaign_tag must contain only alphanumeric characters, dots, hyphens, and underscores")
@@ -1505,8 +1800,11 @@ def _build_scan_command(payload: dict[str, Any]) -> tuple[list[str], str, str]:
         cmd.extend(["--campaign-tag", campaign_tag])
 
     if action == "probe":
+        # Probe = profile only; "autonomous" continues straight into the attack loop.
         if bool(payload.get("autonomous")):
-            cmd.append("--autonomous")
+            cmd.append("--loop")
+        else:
+            cmd.append("--skip-attack")
     else:
         if bool(payload.get("loop")):
             cmd.append("--loop")
@@ -1522,8 +1820,24 @@ def _build_scan_command(payload: dict[str, Any]) -> tuple[list[str], str, str]:
             cmd.append("--no-planner")
         if bool(payload.get("short_prompt")):
             cmd.append("--short-prompt")
+        engine = str(payload.get("engine", "belief") or "belief").strip().lower()
+        if engine not in {"belief", "staged"}:
+            raise ValueError("engine must be either 'belief' or 'staged'.")
+        if engine == "staged":
+            cmd.extend(["--engine", "staged"])
+            max_replans = payload.get("max_replans")
+            if max_replans not in {None, "", 0, "0"}:
+                cmd.extend(["--max-replans", str(max_replans)])
+            attacker = str(payload.get("attacker", "agent") or "agent").strip().lower()
+            if attacker not in {"engine", "agent"}:
+                raise ValueError("attacker must be either 'engine' or 'agent'.")
+            cmd.extend(["--attacker", attacker])
 
     label = f"{action} {target_id}"
+    if action == "run" and str(payload.get("engine", "")).lower() == "staged":
+        label += " [staged]"
+        if str(payload.get("attacker", "")).lower() == "agent":
+            label += " [agent]"
     if campaign_tag:
         label += f" [{campaign_tag}]"
     return cmd, label, target_id
@@ -3266,6 +3580,7 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
         planner_pos = 0
         audit_pos = 0
         results_pos = 0
+        live_pos = 0
 
         def emit(data: dict[str, Any]) -> bool:
             try:
@@ -3283,6 +3598,27 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             status = snap.get("status", "running")
             log_tail: list[str] = list(snap.get("log_tail", []))
             total_lines: int = snap.get("line_count", 0)
+
+            # Tail live_events.jsonl → forward staged-pipeline narrative events verbatim
+            # (stage/plan/objective/attempt/breach/report). Each entry carries its own type.
+            if art_dir:
+                live_log = art_dir / "live_events.jsonl"
+                if live_log.exists():
+                    try:
+                        with open(live_log) as fh:
+                            fh.seek(live_pos)
+                            for raw in fh:
+                                raw = raw.strip()
+                                if not raw:
+                                    continue
+                                try:
+                                    if not emit(json.loads(raw)):
+                                        return
+                                except json.JSONDecodeError:
+                                    pass
+                            live_pos = fh.tell()
+                    except OSError:
+                        pass
 
             # Tail planner_log.jsonl → emit plan events
             if art_dir:
@@ -3469,6 +3805,46 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 }
             )
             return
+        if path == "/api/ops/staged-report":
+            qs = parse_qs(parsed.query)
+            self._send_json(_staged_report(
+                target_id=qs.get("target_id", [""])[0],
+                campaign_tag=qs.get("campaign_tag", [None])[0],
+            ))
+            return
+        if path == "/api/calibration":
+            self._send_json(_calibration_report())
+            return
+        if path == "/api/vulnerabilities":
+            self._send_json(_vuln_catalog())
+            return
+        if path == "/api/evaluators":
+            try:
+                from .evaluators import detector_coverage
+                self._send_json(detector_coverage())
+            except Exception as exc:
+                self._send_json({"error": str(exc)})
+            return
+        if path == "/api/judge-calibration":
+            qs = parse_qs(parsed.query)
+            self._send_json(_judge_calibration(qs.get("model", [None])[0]))
+            return
+        if path == "/api/report-card":
+            qs = parse_qs(parsed.query)
+            card = _build_report_card(qs.get("target_id", [""])[0], qs.get("campaign_tag", [None])[0])
+            self._send_json(card.to_dict() if card else {"error": "target_id required"},
+                            status=200 if card else 400)
+            return
+        if path == "/api/report-card.html":
+            qs = parse_qs(parsed.query)
+            card = _build_report_card(qs.get("target_id", [""])[0], qs.get("campaign_tag", [None])[0])
+            body = (card.to_html() if card else "<h1>target_id required</h1>").encode("utf-8")
+            self.send_response(200 if card else 400)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path == "/api/coverage":
             self._send_json(build_global_coverage())
             return
@@ -3574,6 +3950,9 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 strategy=qs.get("strategy", [None])[0],
             ))
             return
+        if path == "/api/discover":
+            self._send_json(_discover_list())
+            return
         self._send_json({"error": f"unknown route: {path}"}, status=404)
 
     def do_POST(self) -> None:
@@ -3594,6 +3973,30 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/ops/add-api":
                 self._send_json(_configure_api_from_payload(payload), status=201)
+                return
+            if path == "/api/discover/run":
+                self._send_json(_discover_run(payload), status=201)
+                return
+            if path == "/api/discover/approve":
+                self._send_json(_discover_approve(payload), status=201)
+                return
+            if path == "/api/mcp/scan":
+                self._send_json(_mcp_scan(payload), status=201)
+                return
+            if path == "/api/mcp/exploit":
+                self._send_json(_mcp_exploit(payload), status=201)
+                return
+            if path == "/api/models/safety":
+                self._send_json(_model_safety(payload), status=201)
+                return
+            if path == "/api/tools/scan":
+                self._send_json(_tool_scan(payload), status=201)
+                return
+            if path == "/api/harm/scan":
+                self._send_json(_harm_scan(payload), status=201)
+                return
+            if path == "/api/report-card/full":
+                self._send_json(_report_card_full(payload), status=201)
                 return
             if path == "/api/ops/scan":
                 command, label, target_id = _build_scan_command(payload)
@@ -3678,3 +4081,21 @@ def serve_control_plane(*, host: str = "127.0.0.1", port: int = 1337) -> None:
     finally:
         _stop_all_jobs()
         server.server_close()
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Server entrypoint for the web product (`python -m agentbreaker.control_plane`)."""
+    import argparse
+    from dotenv import load_dotenv
+
+    load_dotenv(REPO_ROOT / ".env", override=True)
+    parser = argparse.ArgumentParser(prog="agentbreaker", description="AgentBreaker control plane server.")
+    parser.add_argument("--host", default="127.0.0.1", help="Bind host (default 127.0.0.1).")
+    parser.add_argument("--port", type=int, default=1337, help="Bind port (default 1337).")
+    args = parser.parse_args(argv)
+    serve_control_plane(host=args.host, port=args.port)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

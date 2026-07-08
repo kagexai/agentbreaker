@@ -72,6 +72,7 @@ from . import campaign as _campaign
 
 _WARM_VECTOR_CAP = 10
 _WARM_VECTOR_MIN_PRIORITY = 0.25
+_WARM_VECTOR_IMPROVE_EPS = 0.5   # composite gain required to count exploitation as progress
 _RECENT_COMPOSITES_WINDOW = 20
 _STALL_THRESHOLD = 5
 _COOL_THRESHOLD = 3          # consecutive lows before cooling a strategy
@@ -122,6 +123,38 @@ class WarmVector:
         self.priority = 0.4 * composite_norm + 0.4 * self.last_gradient + 0.2 * diminishing
         return self.priority
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "strategy_id": self.strategy_id,
+            "category": self.category,
+            "target_field": self.target_field,
+            "last_composite": self.last_composite,
+            "last_gradient": self.last_gradient,
+            "response_excerpt": self.response_excerpt,
+            "recommended_next": self.recommended_next,
+            "failure_mode": self.failure_mode,
+            "refinement_count": self.refinement_count,
+            "source_attack_id": self.source_attack_id,
+            "priority": self.priority,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "WarmVector":
+        wv = cls(
+            strategy_id=str(data.get("strategy_id", "")),
+            category=str(data.get("category", "")),
+            target_field=str(data.get("target_field", "")),
+            last_composite=_safe_float(data.get("last_composite", 0)),
+            last_gradient=_safe_float(data.get("last_gradient", 0)),
+            response_excerpt=str(data.get("response_excerpt", "")),
+            recommended_next=str(data.get("recommended_next", "")),
+            failure_mode=str(data.get("failure_mode", "")),
+            refinement_count=int(data.get("refinement_count", 0) or 0),
+            source_attack_id=str(data.get("source_attack_id", "")),
+        )
+        wv.compute_priority()
+        return wv
+
 
 @dataclass
 class BeliefState:
@@ -141,6 +174,8 @@ class BeliefState:
     partial_extractions: dict[str, str] = field(default_factory=dict)
     confirmed_extractions: dict[str, str] = field(default_factory=dict)
     cooled_strategies: set[str] = field(default_factory=set)
+    reopened_strategies: set[str] = field(default_factory=set)
+    ranked_fields_override: list[str] = field(default_factory=list)
 
     # Counters
     total_attacks: int = 0
@@ -166,9 +201,18 @@ class BeliefState:
         failure_mode: str,
         cluster: str,
         breach: bool,
+        is_infra: bool = False,
     ) -> None:
-        """Update all aggregates from a single attack result."""
+        """Update all aggregates from a single attack result.
+
+        Infra failures (timeouts, gateway errors) carry no behavioral signal, so
+        they are counted for observability but excluded from scoring, cooling, and
+        stall tracking -- otherwise a flaky endpoint would wrongly retire viable
+        strategies and inflate the stall counter.
+        """
         self.total_attacks += 1
+        if is_infra:
+            return
         if breach:
             self.total_breaches += 1
         self.best_composite = max(self.best_composite, composite)
@@ -196,6 +240,12 @@ class BeliefState:
             recent = scores[-_COOL_THRESHOLD:]
             if all(s < _COOL_SCORE_FLOOR for s in recent):
                 self.cooled_strategies.add(strategy_id)
+
+        # Strategy reopening: a previously-cooled strategy that regains signal
+        # becomes a candidate the planner should reconsider.
+        if composite >= _COOL_SCORE_FLOOR and strategy_id in self.cooled_strategies:
+            self.uncool_strategy(strategy_id)
+            self.reopened_strategies.add(strategy_id)
 
     def add_warm_vector(self, wv: WarmVector) -> None:
         """Add or update a warm vector, deduplicating by strategy+target_field."""
@@ -270,9 +320,50 @@ class BeliefState:
                 if all(s < _COOL_SCORE_FLOOR for s in recent):
                     self.cooled_strategies.add(strategy_id)
 
+    def intelligence_to_dict(self) -> dict[str, Any]:
+        """Serialize only the learned intelligence (not TSV-derivable aggregates).
+
+        Aggregates (strategy_scores, recent_composites, stall_counter) are rebuilt
+        from the results TSV via bootstrap_from_history; persisting them too would
+        risk double-counting on reload.
+        """
+        return {
+            "version": 1,
+            "target_id": self.target_id,
+            "warm_vectors": [wv.to_dict() for wv in self.warm_vectors],
+            "partial_extractions": dict(self.partial_extractions),
+            "confirmed_extractions": dict(self.confirmed_extractions),
+            "cooled_strategies": sorted(self.cooled_strategies),
+            "reopened_strategies": sorted(self.reopened_strategies),
+        }
+
+    def load_intelligence(self, data: dict[str, Any]) -> None:
+        """Restore learned intelligence from a persisted snapshot (merges, never
+        clobbers aggregates already bootstrapped from history)."""
+        try:
+            self.warm_vectors = [
+                WarmVector.from_dict(d) for d in data.get("warm_vectors", []) if isinstance(d, dict)
+            ]
+            self.warm_vectors.sort(key=lambda v: v.priority, reverse=True)
+            for fld, frag in (data.get("partial_extractions", {}) or {}).items():
+                self.partial_extractions[str(fld)] = str(frag)
+            for fld, secret in (data.get("confirmed_extractions", {}) or {}).items():
+                self.confirmed_extractions[str(fld)] = str(secret)
+            self.cooled_strategies |= {str(s) for s in data.get("cooled_strategies", [])}
+            self.reopened_strategies |= {str(s) for s in data.get("reopened_strategies", [])}
+        except Exception:
+            logger.warning("Failed to load persisted belief intelligence", exc_info=True)
+
     @property
     def ranked_fields(self) -> list[str]:
-        """Sensitive fields from the profile, ranked by priority."""
+        """Sensitive fields, ranked by priority.
+
+        A CTF/stage-aware override (refreshed between attacks) takes precedence so
+        that fields unlocked mid-campaign are picked up; otherwise fall back to the
+        static attack-surface ordering from the profile.
+        """
+        if self.ranked_fields_override:
+            return self.ranked_fields_override
         attack_surface = self.profile.get("attack_surface", {})
         fields: list[str] = []
         for priority_level in ("high_priority", "medium_priority", "low_priority"):
@@ -356,10 +447,15 @@ class CampaignEngine:
         # Strategy sequence
         self._strategy_sequence = self._load_strategy_sequence()
 
+        # Count of actual experiments executed this invocation (includes PAIR
+        # refinement rounds and infra retries). Used for max_steps so a single
+        # action that refines N times is not mistaken for one attack.
+        self._experiments_run = 0
+
         # Belief state
         self.belief = BeliefState(target_id=target_id, profile=profile)
 
-        # Bootstrap from existing campaign results
+        # Bootstrap aggregates from existing campaign results (TSV)
         rows = _campaign._target_rows(target_id)
         if rows:
             self.belief.bootstrap_from_history(rows)
@@ -368,6 +464,46 @@ class CampaignEngine:
                 self.belief.total_attacks, self.belief.total_breaches,
                 self.belief.best_composite, self.belief.stall_counter,
             )
+
+        # Restore learned intelligence (warm vectors, extractions) from disk so a
+        # restart/crash does not throw away the engine's accumulated leads. Merged
+        # AFTER bootstrap so aggregates and intelligence coexist.
+        self._load_belief()
+
+    @property
+    def _belief_path(self) -> Path:
+        from . import artifact_paths
+        return artifact_paths.artifact_root(self.target_id, self.campaign_tag) / "belief_state.json"
+
+    def _save_belief(self) -> None:
+        """Persist learned intelligence atomically (temp file + os.replace)."""
+        try:
+            path = self._belief_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(self.belief.intelligence_to_dict(), indent=2))
+            os.replace(tmp, path)
+        except Exception:
+            logger.debug("Failed to persist belief state", exc_info=True)
+
+    def _load_belief(self) -> None:
+        """Restore learned intelligence from disk if present and well-formed."""
+        try:
+            path = self._belief_path
+            if not path.exists():
+                return
+            data = json.loads(path.read_text())
+            if not isinstance(data, dict):
+                return
+            self.belief.load_intelligence(data)
+            logger.info(
+                "Restored belief intelligence: %d warm vectors, %d partial, %d confirmed",
+                len(self.belief.warm_vectors),
+                len(self.belief.partial_extractions),
+                len(self.belief.confirmed_extractions),
+            )
+        except Exception:
+            logger.warning("Failed to read persisted belief state; starting fresh", exc_info=True)
 
     def _load_strategy_sequence(self) -> list[str]:
         """Load strategy sequence from taxonomy or use defaults."""
@@ -389,8 +525,15 @@ class CampaignEngine:
         steps_run = 0
         exit_code = 0
 
+        pacing_seconds = float(
+            (self._config.get("campaign", {}) or {}).get("pacing_seconds", 1.0)
+        )
+
         try:
             while True:
+                # 0. REFRESH dynamic context (CTF stage progression, ranked fields)
+                self._refresh_dynamic_context()
+
                 # 1. DECIDE
                 action = self.decide_next_action()
 
@@ -408,6 +551,7 @@ class CampaignEngine:
 
                 # 3. LEARN
                 self.update_belief(action, result)
+                self._save_belief()
 
                 # 4. RECORD (uses existing campaign.py helpers)
                 status = _campaign._infer_status(result)
@@ -454,16 +598,23 @@ class CampaignEngine:
                 steps_run += 1
                 if not loop:
                     break
-                if max_steps is not None and steps_run >= max_steps:
-                    print(f"[engine] Reached max-steps={max_steps}; stopping.")
+                # max_steps counts actual experiments (incl. PAIR refinements),
+                # not decision iterations -- a refining action runs several attacks.
+                if max_steps is not None and self._experiments_run >= max_steps:
+                    print(
+                        f"[engine] Reached max-steps={max_steps} "
+                        f"({self._experiments_run} experiments); stopping."
+                    )
                     break
 
-                time.sleep(1)  # Rate-limit courtesy
+                if pacing_seconds > 0:
+                    time.sleep(pacing_seconds)  # Rate-limit courtesy
 
         except KeyboardInterrupt:
             print(f"\n[engine] Interrupted after {steps_run} attacks.")
             exit_code = 130
         finally:
+            self._save_belief()
             _campaign._print_session_summary(self.target_id)
 
         return exit_code
@@ -483,7 +634,19 @@ class CampaignEngine:
         5. Taxonomy exploration (underexplored categories)
         6. LLM generator (when stalled)
         7. Fallback (cycle through template strategies)
+
+        Note: priority 1 was previously able to starve priorities 2-7 by pinning a
+        mediocre warm vector indefinitely; update_belief now decays vectors on every
+        non-improving exploitation so the lower priorities stay reachable.
         """
+        action = self._decide_raw()
+        # Template payloads are deterministic per (strategy, variant); skip variants
+        # that would reproduce a recent payload so we keep exploring the surface.
+        if action.use_template:
+            self._ensure_unique_payload(action)
+        return action
+
+    def _decide_raw(self) -> AttackAction:
         attack_id = _campaign._next_attack_id()
         ranked_fields = self.belief.ranked_fields
 
@@ -654,6 +817,12 @@ class CampaignEngine:
 
         allowed = [s for s in self._strategy_sequence if not self.belief.is_cooled(s)]
         discouraged = list(self.belief.cooled_strategies)
+        reopened = list(self.belief.reopened_strategies)
+
+        try:
+            ctf_context = _campaign._ctf_progress_context(self.target_id)
+        except Exception:
+            ctf_context = {}
 
         try:
             plan = self.planner.plan(
@@ -661,10 +830,10 @@ class CampaignEngine:
                 profile=self.profile,
                 allowed_strategies=allowed,
                 discouraged_strategies=discouraged,
-                reopened_strategies=[],
+                reopened_strategies=reopened,
                 ranked_fields=ranked_fields,
                 recent_attempts=recent_attempts,
-                ctf_context={},
+                ctf_context=ctf_context,
                 fallback_strategy=allowed[0] if allowed else "completion_attack",
                 fallback_variant=0,
             )
@@ -743,6 +912,7 @@ class CampaignEngine:
             self.belief.total_attacks,
             self.belief.recent_composites,
             plateau_reason=self._plateau_reason(),
+            chain_context=(dict(self.belief.partial_extractions) or None),
         )
 
         if not should_activate:
@@ -830,6 +1000,66 @@ class CampaignEngine:
             source="fallback",
         )
 
+    def _refresh_dynamic_context(self) -> None:
+        """Re-derive CTF/stage-aware ranked fields between attacks.
+
+        _ranked_target_fields reads ctf_state from disk on each call, so this picks
+        up new stages/fields unlocked mid-campaign. Cheap no-op for non-CTF targets
+        (returns the same ordering). Failures are non-fatal -- the static profile
+        ordering remains the fallback.
+        """
+        try:
+            fields = _campaign._ranked_target_fields(self.target_id, self.profile)
+        except Exception:
+            logger.debug("Dynamic ranked-field refresh failed", exc_info=True)
+            return
+        if fields and fields != self.belief.ranked_fields_override:
+            self.belief.ranked_fields_override = fields
+            logger.debug("Refreshed ranked fields: %s", fields[:5])
+
+    def _ensure_unique_payload(self, action: AttackAction) -> None:
+        """Advance variant_index until the previewed payload is not a near-duplicate.
+
+        Mirrors the legacy _choose_strategy dedup pass: preview each candidate
+        variant in-process and skip those too similar to recently-sent payloads.
+        Best-effort -- if every candidate collides, keep the original variant.
+        """
+        try:
+            seen = _campaign._seen_payload_signatures(self.target_id)
+        except Exception:
+            return
+        if not seen:
+            return
+
+        base_variant = action.variant_index
+        for offset in range(_campaign.MAX_VARIANT_SEARCH):
+            variant = base_variant + offset
+            try:
+                preview = preview_template_payload(
+                    target_id=self.target_id,
+                    config_path=str(self.config_path),
+                    strategy_id=action.strategy_id,
+                    variant_index=variant,
+                    anchor_payload=action.anchor_payload,
+                    attack_spec=action.attack_spec,
+                    profile=self.profile,
+                )
+            except Exception:
+                logger.debug("Payload preview failed for %s v%d", action.strategy_id, variant,
+                             exc_info=True)
+                return
+            signature = _campaign._normalize_payload_text(preview)
+            too_similar, _score = _campaign._too_similar_to_recent(signature, seen)
+            if not too_similar:
+                if variant != base_variant:
+                    print(f"[engine]   dedup: advanced {action.strategy_id} "
+                          f"variant {base_variant} -> {variant}")
+                action.variant_index = variant
+                return
+
+        logger.debug("All %d variants of %s near-duplicate; keeping v%d",
+                     _campaign.MAX_VARIANT_SEARCH, action.strategy_id, base_variant)
+
     # ------------------------------------------------------------------
     # Execution
     # ------------------------------------------------------------------
@@ -860,6 +1090,7 @@ class CampaignEngine:
 
         # Run experiment directly (no subprocess)
         scores = self.harness.run_experiment(payload)
+        self._experiments_run += 1
 
         return self._assemble_result_dict(action, payload, scores, metadata)
 
@@ -915,6 +1146,7 @@ class CampaignEngine:
         )
 
         scores = self.harness.run_experiment(target_payload)
+        self._experiments_run += 1
 
         # Build metadata
         owasp = ""
@@ -997,6 +1229,7 @@ class CampaignEngine:
             )
 
             refined_scores = self.harness.run_experiment(refined_target)
+            self._experiments_run += 1
             refined_metadata = dict(metadata)
             refined_metadata["description"] += f" (refinement round {round_num})"
 
@@ -1094,18 +1327,31 @@ class CampaignEngine:
         partial_leak = bool(result.get("partial_leak_detected", False))
         recommended_next = str(result.get("recommended_next_family", ""))
 
-        # 1. Update aggregates
-        self.belief.record_result(strategy_id, composite, gradient, failure_mode, cluster, breach)
+        # Fetch the audit entry once and reuse it throughout.
+        audit = _campaign._latest_audit_entry(result["attack_id"])
+        response_text = _campaign._audit_text(audit) if audit else ""
+
+        # Classify infra failures (transient timeouts/gateway errors). These carry
+        # no behavioral signal and must not pollute scores, cooling, or warm vectors.
+        is_infra = (cluster in INFRA_CLUSTERS) or is_infra_failure_response(response_text)
+
+        # 1. Update aggregates (infra failures are counted but excluded from learning)
+        self.belief.record_result(
+            strategy_id, composite, gradient, failure_mode, cluster, breach,
+            is_infra=is_infra,
+        )
+
+        if is_infra:
+            logger.info("Skipped belief update for infra failure on %s (cluster=%s)",
+                        result["attack_id"], cluster)
+            return
 
         # 2. Detect warm vectors
         if gradient >= 0.25 or partial_leak or composite >= 4.0:
             target_field = action.target_field
             response_excerpt = str(result.get("payload_preview", ""))[:200]
-
-            # Try to get response text from audit log
-            audit = _campaign._latest_audit_entry(result["attack_id"])
-            if audit:
-                response_excerpt = _campaign._audit_text(audit)[:200]
+            if response_text:
+                response_excerpt = response_text[:200]
 
             wv = WarmVector(
                 strategy_id=strategy_id,
@@ -1126,7 +1372,7 @@ class CampaignEngine:
             )
 
         # 3. Extract leaked fragments for chaining
-        if audit := _campaign._latest_audit_entry(result["attack_id"]):
+        if audit:
             semantic = _campaign._audit_semantic_breach(audit)
             if semantic.get("partial_leak") and semantic.get("matched_fragment"):
                 field = action.target_field
@@ -1142,12 +1388,17 @@ class CampaignEngine:
                 field = action.target_field
                 self.belief.confirmed_extractions[field] = str(semantic["matched_secret"])
 
-        # 4. Decay warm vectors on failed exploitation
-        if action.warm_vector and composite < 2.0:
-            self.belief.decay_warm_vector(
-                action.warm_vector.strategy_id,
-                action.warm_vector.target_field,
-            )
+        # 4. Decay warm vectors on non-improving exploitation.
+        #    refinement_count must advance on every fruitless attempt -- not only on
+        #    composite < 2.0 -- otherwise a vector stuck scoring 2.0-3.9 stays
+        #    top-priority forever and starves the planner/taxonomy/generator paths.
+        if action.warm_vector:
+            improved = breach or composite > action.warm_vector.last_composite + _WARM_VECTOR_IMPROVE_EPS
+            if not improved:
+                self.belief.decay_warm_vector(
+                    action.warm_vector.strategy_id,
+                    action.warm_vector.target_field,
+                )
 
     # ------------------------------------------------------------------
     # Helpers

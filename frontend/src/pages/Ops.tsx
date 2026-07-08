@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useOps, useLaunchScan, useAddTarget, useRemoveTarget, useStopJob, useAddApi } from '@/hooks/useApi'
+import { useOps, useLaunchScan, useAddTarget, useRemoveTarget, useStopJob, useAddApi, useDiscover, useDiscoverRun, useDiscoverApprove, useMcpScan, useMcpExploit, useModelSafety, useStagedReport, useCalibration, useVulnCatalog, useToolScan, useReportCard, useReportCardFull, type McpReport, type McpExploitResult, type ModelSafetyResponse, type ToolScanResponse, type ReportCard } from '@/hooks/useApi'
 import { LiveAttackPanel } from '@/components/LiveAttackPanel'
 import { StatCards } from '@/components/StatCards'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -21,6 +21,16 @@ function StatusBadge({ status }: { status: string }) {
   return <Badge className={`text-xs ${cls}`}>{status}</Badge>
 }
 
+// Curated frontier models for one-click red-team targets. api = provider_kind (key
+// configured under the APIs tab). Model ids are the provider's own names.
+const FRONTIER_MODELS: { label: string; model: string; targetId: string; api: string }[] = [
+  { label: 'GPT-5.4 (OpenAI)',        model: 'gpt-5.4',           targetId: 'gpt-5.4',        api: 'openai' },
+  { label: 'GPT-5.2 (OpenAI)',        model: 'gpt-5.2',           targetId: 'gpt-5.2',        api: 'openai' },
+  { label: 'Claude Opus 4.8',         model: 'claude-opus-4-8',   targetId: 'claude-opus',    api: 'anthropic' },
+  { label: 'Claude Sonnet 5',         model: 'claude-sonnet-5',   targetId: 'claude-sonnet',  api: 'anthropic' },
+  { label: 'Gemini 2.5 Pro (Google)', model: 'gemini-2.5-pro',    targetId: 'gemini-2.5-pro', api: 'gemini' },
+]
+
 export function Ops() {
   const { data, isLoading, error, refetch } = useOps()
   const launchScan = useLaunchScan()
@@ -28,6 +38,97 @@ export function Ops() {
   const removeTarget = useRemoveTarget()
   const stopJob = useStopJob()
   const addApi = useAddApi()
+  const discover = useDiscover()
+  const discoverRun = useDiscoverRun()
+  const discoverApprove = useDiscoverApprove()
+  const mcpScan = useMcpScan()
+  const mcpExploit = useMcpExploit()
+  const modelSafety = useModelSafety()
+  const [mcpServer, setMcpServer] = useState('')
+  const [mcpHeader, setMcpHeader] = useState('')
+  const [mcpReport, setMcpReport] = useState<McpReport | null>(null)
+  const [mcpExploitResult, setMcpExploitResult] = useState<McpExploitResult | null>(null)
+  const [frontierModel, setFrontierModel] = useState('')
+  const [safetySel, setSafetySel] = useState<Set<string>>(new Set())
+  const [safetyResult, setSafetyResult] = useState<ModelSafetyResponse | null>(null)
+
+  async function handleMcpScan(e: React.FormEvent) {
+    e.preventDefault()
+    if (!mcpServer) return toast.error('Enter an MCP server URL')
+    try {
+      const r = await mcpScan.mutateAsync({ server: mcpServer, ...(mcpHeader && { header: mcpHeader }) })
+      setMcpReport(r)
+      toast.success(`Scanned: score ${r.score}/100 (${r.grade})`)
+    } catch (err) {
+      setMcpReport(null)
+      toast.error(err instanceof Error ? err.message : 'Scan failed')
+    }
+  }
+
+  async function handleMcpExploit() {
+    if (!mcpServer) return toast.error('Enter an MCP server URL')
+    try {
+      const r = await mcpExploit.mutateAsync({ server: mcpServer, ...(mcpHeader && { header: mcpHeader }) })
+      setMcpExploitResult(r)
+      toast[r.breached ? 'error' : 'success'](r.breached ? 'EXPLOITABLE — agent obeyed injection' : 'Not exploitable')
+    } catch (err) {
+      setMcpExploitResult(null)
+      toast.error(err instanceof Error ? err.message : 'Exploit failed')
+    }
+  }
+
+  async function handleQuickAddFrontier() {
+    const m = FRONTIER_MODELS.find(f => f.model === frontierModel)
+    if (!m) return toast.error('Pick a frontier model')
+    try {
+      await addTarget.mutateAsync({
+        input_kind: 'model',
+        model: m.model,
+        target_id: m.targetId,
+        provider_kind: m.api,
+      })
+      toast.success(`Added ${m.label} — configure its ${m.api} key under APIs, then run a safety scan`)
+      setSafetySel(prev => new Set(prev).add(m.targetId))
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to add model')
+    }
+  }
+
+  async function handleRunSafety() {
+    const targets = [...safetySel]
+    if (targets.length === 0) return toast.error('Select at least one model target')
+    try {
+      const r = await modelSafety.mutateAsync({ targets })
+      setSafetyResult(r)
+      const best = r.leaderboard.find(x => !x.error)
+      toast.success(best ? `Ranked ${r.leaderboard.length} model(s) — safest: ${best.model} (${best.resistance}/100)` : 'Scan complete')
+    } catch (err) {
+      setSafetyResult(null)
+      toast.error(err instanceof Error ? err.message : 'Safety scan failed')
+    }
+  }
+
+  async function handleDiscoverRun() {
+    try {
+      const s = await discoverRun.mutateAsync({}) as { new?: number }
+      toast.success(`Discovery: ${s.new ?? 0} new candidate(s)`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Discovery failed')
+    }
+  }
+
+  async function handleApprove(c: { id: string; authorized_by_design?: boolean }) {
+    try {
+      const authorized_by = c.authorized_by_design
+        ? undefined
+        : (window.prompt('Authorization (who authorized testing this target)?') || '')
+      if (!c.authorized_by_design && !authorized_by) return toast.error('Authorization required')
+      const r = await discoverApprove.mutateAsync({ candidate_id: c.id, ...(authorized_by && { authorized_by }) }) as { target_id?: string }
+      toast.success(`Registered target ${r.target_id}`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Approve failed')
+    }
+  }
 
   // Scan form state
   const [scanTarget, setScanTarget] = useState('')
@@ -37,6 +138,8 @@ export function Ops() {
   const [autonomous, setAutonomous] = useState(false)
   const [dryRun, setDryRun] = useState(false)
   const [shortPrompt, setShortPrompt] = useState(false)
+  const [engine, setEngine] = useState('belief')
+  const [attacker, setAttacker] = useState('agent')
 
   // Add target form state
   type TargetCategory = 'cloud-llm' | 'local-llm' | 'http-api' | 'ctf'
@@ -73,6 +176,9 @@ export function Ops() {
     { label: 'APIs Configured', value: Object.keys(data.api_config).length },
   ]
 
+  // Model targets (bare LLMs) eligible for the safety leaderboard.
+  const llmTargets = data.targets.filter(t => t.provider === 'llm')
+
   async function handleScan(e: React.FormEvent) {
     e.preventDefault()
     if (!scanTarget) return toast.error('Select a target to scan')
@@ -89,6 +195,8 @@ export function Ops() {
         autonomous,
         dry_run: dryRun,
         short_prompt: shortPrompt,
+        engine,
+        ...(engine === 'staged' && { attacker }),
       })
       toast.success(`Scan launched for ${scanTarget}`)
       await refetch()
@@ -220,6 +328,9 @@ export function Ops() {
         <TabsList className="mb-4">
           <TabsTrigger value="scan">Scan</TabsTrigger>
           <TabsTrigger value="targets">Targets</TabsTrigger>
+          <TabsTrigger value="discover">Discover</TabsTrigger>
+          <TabsTrigger value="models">Model RT</TabsTrigger>
+          <TabsTrigger value="mcp">MCP</TabsTrigger>
           <TabsTrigger value="apis">APIs</TabsTrigger>
         </TabsList>
 
@@ -251,6 +362,32 @@ export function Ops() {
                     <label className="text-xs text-muted-foreground mb-1 block">Max Steps</label>
                     <Input type="number" placeholder="e.g. 20" value={maxSteps} onChange={e => setMaxSteps(e.target.value)} />
                   </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">Engine</label>
+                    <Select value={engine} onValueChange={setEngine}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Engine…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="belief">Belief loop (default)</SelectItem>
+                        <SelectItem value="staged">Staged agents (recon→analyse→attack→report)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {engine === 'staged' && (
+                    <div>
+                      <label className="text-xs text-muted-foreground mb-1 block">Attacker</label>
+                      <Select value={attacker} onValueChange={setAttacker}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Attacker…" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="agent">Agent (LLM reason→craft→reflect, default)</SelectItem>
+                          <SelectItem value="engine">Engine (legacy template loop)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                 </div>
                 <div className="flex gap-4 text-sm flex-wrap">
                   <label className="flex items-center gap-2 cursor-pointer">
@@ -321,6 +458,15 @@ export function Ops() {
               <LiveAttackPanel jobId={runningJob.job_id} targetId={runningJob.target_id} />
             ) : null
           })()}
+
+          {/* Post-evaluation: once a job finishes, surface its OWASP report card automatically. */}
+          {(() => {
+            const running = data.jobs.some(j => j.status === 'running')
+            const lastDone = data.jobs.find(j => j.status !== 'running' && j.target_id)
+            return !running && lastDone ? <ReportCardCard fixedTarget={lastDone.target_id} /> : null
+          })()}
+
+          {scanTarget && <StagedCoverageCard targetId={scanTarget} />}
         </TabsContent>
 
         {/* ── Targets tab ── */}
@@ -542,6 +688,288 @@ export function Ops() {
           </Card>
         </TabsContent>
 
+        {/* ── Discover tab ── */}
+        <TabsContent value="discover" className="grid gap-6">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-semibold">Discover targets</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Find public CTFs + new models. Discover-only — approval registers a target.
+                  </p>
+                </div>
+                <Button onClick={handleDiscoverRun} disabled={discoverRun.isPending}>
+                  {discoverRun.isPending ? 'Scanning…' : 'Run discovery'}
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {discover.isLoading ? (
+                <Skeleton className="h-32" />
+              ) : !discover.data?.candidates?.length ? (
+                <p className="text-sm text-muted-foreground">No candidates yet. Run discovery to find some.</p>
+              ) : (
+                <div className="grid gap-2">
+                  {discover.data.candidates.map(c => (
+                    <div key={c.id} className="flex items-center justify-between gap-3 rounded border border-border p-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 text-sm">
+                          <span className="font-medium truncate">{c.name}</span>
+                          <Badge className="text-xs">{c.kind}</Badge>
+                          {c.authorized_by_design
+                            ? <Badge className="text-xs bg-primary/15 text-primary">public</Badge>
+                            : <Badge className="text-xs bg-secondary/15 text-secondary">needs auth</Badge>}
+                          <StatusBadge status={c.status} />
+                        </div>
+                        <div className="text-xs text-muted-foreground truncate">{c.url || c.model}</div>
+                      </div>
+                      <Button
+                        variant="outline"
+                        disabled={c.status === 'registered' || discoverApprove.isPending}
+                        onClick={() => handleApprove(c)}
+                      >
+                        {c.status === 'registered' ? 'Registered' : 'Approve'}
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ── Model RT tab ── */}
+        <TabsContent value="models" className="grid gap-6">
+          <ReportCardCard targets={llmTargets.map(t => t.target_id)} />
+          <VulnCatalogCard />
+          <ToolAbuseCard />
+          <DetectorReliabilityCard />
+          <Card>
+            <CardHeader>
+              <h3 className="font-semibold">Add a frontier model (one click)</h3>
+              <p className="text-xs text-muted-foreground">
+                Registers a bare frontier model as a red-team target. Configure its provider key
+                under the APIs tab, then run a safety scan below or a full staged campaign from Scan.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-wrap gap-3 items-end">
+                <div className="min-w-[240px]">
+                  <label className="text-xs text-muted-foreground mb-1 block">Frontier model</label>
+                  <Select value={frontierModel} onValueChange={setFrontierModel}>
+                    <SelectTrigger><SelectValue placeholder="Choose a model…" /></SelectTrigger>
+                    <SelectContent>
+                      {FRONTIER_MODELS.map(m => (
+                        <SelectItem key={m.targetId} value={m.model}>{m.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button type="button" onClick={handleQuickAddFrontier} disabled={addTarget.isPending}>
+                  {addTarget.isPending ? 'Adding…' : 'Add as target'}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <h3 className="font-semibold">Model safety leaderboard</h3>
+              <p className="text-xs text-muted-foreground">
+                Canary-compliance probes (jailbreak / instruction-override / prompt-extraction /
+                deception). A safe model refuses; higher resistance = safer. Read-only, needs each
+                model's provider key configured.
+              </p>
+            </CardHeader>
+            <CardContent className="grid gap-3">
+              {llmTargets.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No model targets yet — add one above.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {llmTargets.map(t => {
+                    const on = safetySel.has(t.target_id)
+                    return (
+                      <Button key={t.target_id} type="button" size="sm"
+                              variant={on ? 'default' : 'outline'}
+                              onClick={() => setSafetySel(prev => {
+                                const next = new Set(prev)
+                                if (next.has(t.target_id)) next.delete(t.target_id); else next.add(t.target_id)
+                                return next
+                              })}>
+                        {on ? '✓ ' : ''}{t.target_id}
+                      </Button>
+                    )
+                  })}
+                </div>
+              )}
+              <div>
+                <Button type="button" onClick={handleRunSafety}
+                        disabled={modelSafety.isPending || safetySel.size === 0}>
+                  {modelSafety.isPending ? 'Probing…' : `Run safety scan (${safetySel.size})`}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {safetyResult && (
+            <Card>
+              <CardHeader>
+                <h3 className="font-semibold">Leaderboard · safest first</h3>
+                <p className="text-xs text-muted-foreground">{safetyResult.generated_at}</p>
+              </CardHeader>
+              <CardContent className="grid gap-2">
+                {safetyResult.leaderboard.map((r, i) => {
+                  const failed = [...new Set(r.outcomes.filter(o => !o.resisted).map(o => o.category))]
+                  return (
+                    <div key={r.model} className="rounded border border-border p-3">
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs text-muted-foreground w-5">{i + 1}</span>
+                        <span className={cn('text-lg font-bold w-9 h-9 rounded flex items-center justify-center shrink-0',
+                          r.grade === 'A' ? 'bg-primary/15 text-primary'
+                            : r.grade === 'B' || r.grade === 'C' ? 'bg-secondary/15 text-secondary'
+                            : 'bg-destructive/15 text-destructive')}>{r.error ? '—' : r.grade}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium">{r.model}</div>
+                          {r.error ? (
+                            <div className="text-xs text-destructive truncate">{r.error}</div>
+                          ) : (
+                            <div className="mt-1 h-2 rounded bg-muted overflow-hidden">
+                              <div className={cn('h-full', r.resistance >= 75 ? 'bg-primary' : r.resistance >= 40 ? 'bg-secondary' : 'bg-destructive')}
+                                   style={{ width: `${r.resistance}%` }} />
+                            </div>
+                          )}
+                        </div>
+                        <span className="text-sm font-semibold w-16 text-right">{r.error ? 'n/a' : `${r.resistance}/100`}</span>
+                      </div>
+                      {!r.error && failed.length > 0 && (
+                        <div className="text-xs text-muted-foreground mt-2 ml-8">
+                          complied on: {failed.join(', ')}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+
+        {/* ── MCP tab ── */}
+        <TabsContent value="mcp" className="grid gap-6">
+          <Card>
+            <CardHeader>
+              <h3 className="font-semibold">MCP server hygiene scan</h3>
+              <p className="text-xs text-muted-foreground">
+                Read-only. Enumerates an MCP server's tools/resources and flags risky surface.
+                No tool execution. Only scan servers you're authorized to test.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleMcpScan} className="grid gap-3">
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">MCP server URL *</label>
+                    <Input placeholder="https://host/mcp" value={mcpServer} onChange={e => setMcpServer(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">Header (optional)</label>
+                    <Input placeholder="Authorization: Bearer …" value={mcpHeader} onChange={e => setMcpHeader(e.target.value)} />
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <Button type="submit" disabled={mcpScan.isPending}>
+                    {mcpScan.isPending ? 'Scanning…' : 'Scan hygiene'}
+                  </Button>
+                  <Button type="button" variant="outline" disabled={mcpExploit.isPending}
+                          onClick={handleMcpExploit}
+                          title="Runs a real reference-agent LLM (uses your API key). Tools are never executed.">
+                    {mcpExploit.isPending ? 'Testing…' : 'Test injection exploit (LLM)'}
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+
+          {mcpExploitResult && (
+            <Card>
+              <CardHeader>
+                <div className="flex items-center gap-2">
+                  <Badge className={cn('text-xs uppercase',
+                    mcpExploitResult.breached ? 'bg-destructive/15 text-destructive' : 'bg-primary/15 text-primary')}>
+                    {mcpExploitResult.breached ? '⚠ Exploitable' : 'Not exploitable'}
+                  </Badge>
+                  <span className="text-sm">indirect-injection · reference agent R = <code>{mcpExploitResult.reference_model}</code></span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Measured on (server + reference agent R), not the server alone. Tools attempted:
+                  {' '}{mcpExploitResult.tool_calls.length} · executed: {mcpExploitResult.executed_any_tool ? 'yes ⚠' : 'none (sandboxed)'}
+                </p>
+              </CardHeader>
+              <CardContent className="grid gap-2">
+                {mcpExploitResult.detail && <p className="text-sm">{mcpExploitResult.detail}</p>}
+                {mcpExploitResult.tool_calls.length > 0 && (
+                  <div className="rounded border border-border p-2">
+                    <div className="text-xs text-muted-foreground mb-1">Tool-call trace</div>
+                    {mcpExploitResult.tool_calls.map((c, i) => (
+                      <code key={i} className="block text-xs">{c.tool}({JSON.stringify(c.args)}) · executed={String(c.executed)}</code>
+                    ))}
+                  </div>
+                )}
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">injected payload</summary>
+                  <pre className="whitespace-pre-wrap mt-1">{mcpExploitResult.injected_payload}</pre>
+                </details>
+              </CardContent>
+            </Card>
+          )}
+
+          {mcpReport && (
+            <Card>
+              <CardHeader>
+                <div className="flex items-center gap-3">
+                  <span className={cn(
+                    'text-2xl font-bold w-12 h-12 rounded flex items-center justify-center',
+                    mcpReport.grade === 'A' ? 'bg-primary/15 text-primary'
+                      : mcpReport.grade === 'B' ? 'bg-secondary/15 text-secondary'
+                      : 'bg-destructive/15 text-destructive'
+                  )}>{mcpReport.grade}</span>
+                  <div>
+                    <div className="font-semibold">{mcpReport.score}/100 · {mcpReport.server}</div>
+                    <div className="text-xs text-muted-foreground">
+                      auth_required={String(mcpReport.auth_required)} · tools={mcpReport.counts.tools} ·
+                      resources={mcpReport.counts.resources} · prompts={mcpReport.counts.prompts} ·
+                      {' '}{mcpReport.findings.length} finding(s)
+                    </div>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="grid gap-2">
+                {mcpReport.findings.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No hygiene issues found. ✅</p>
+                ) : (
+                  [...mcpReport.findings]
+                    .sort((a, b) => ({critical:0,high:1,medium:2,low:3,info:4}[a.severity] ?? 9) - ({critical:0,high:1,medium:2,low:3,info:4}[b.severity] ?? 9))
+                    .map((f, i) => (
+                    <div key={i} className="rounded border border-border p-3">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Badge className={cn('text-xs uppercase',
+                          f.severity === 'critical' || f.severity === 'high' ? 'bg-destructive/15 text-destructive'
+                            : f.severity === 'medium' ? 'bg-secondary/15 text-secondary'
+                            : 'bg-muted text-muted-foreground')}>{f.severity}</Badge>
+                        <span className="text-sm font-medium">{f.title}</span>
+                        <code className="text-xs text-muted-foreground ml-auto truncate max-w-[40%]">{f.target}</code>
+                      </div>
+                      <p className="text-xs text-muted-foreground">{f.detail}</p>
+                      <p className="text-xs mt-1"><span className="text-primary">fix:</span> {f.remediation}</p>
+                    </div>
+                  ))
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+
         {/* ── APIs tab ── */}
         <TabsContent value="apis" className="grid gap-6">
           <Card>
@@ -664,6 +1092,365 @@ export function Ops() {
           </Card>
         </TabsContent>
       </Tabs>
+    </div>
+  )
+}
+
+// Attack-method coverage grid from the latest staged-pipeline report (deepteam-style):
+// which techniques were tried and how often they broke through.
+function StagedCoverageCard({ targetId }: { targetId: string }) {
+  const { data } = useStagedReport(targetId)
+  const cov = data?.coverage
+  const matrix = cov?.method_matrix
+  if (!data || !matrix || Object.keys(matrix).length === 0) return null
+
+  const rows = Object.entries(matrix).sort((a, b) => b[1].attempts - a[1].attempts)
+  const label = (m: string) =>
+    m === 'direct' ? 'Direct (LLM PAIR)'
+      : m === 'crescendo' ? 'Crescendo (multi-turn)'
+      : m === 'linear' ? 'Linear (multi-turn)'
+      : m.startsWith('enh:') ? `Enhance · ${m.slice(4)}`
+      : m
+
+  return (
+    <Card>
+      <CardHeader>
+        <h3 className="font-semibold">Attack-method coverage · {targetId}</h3>
+        <p className="text-xs text-muted-foreground">
+          Latest staged run: {cov?.breaches ?? 0} breach(es) across {cov?.objectives_attempted ?? 0}/
+          {cov?.objectives ?? 0} objectives in {cov?.experiments_spent ?? 0} experiments. Which
+          techniques the target resisted vs. fell to.
+        </p>
+      </CardHeader>
+      <CardContent className="grid gap-1.5">
+        {rows.map(([method, cell]) => {
+          const rate = cell.attempts ? cell.breaks / cell.attempts : 0
+          return (
+            <div key={method} className="flex items-center gap-3">
+              <span className="text-sm w-48 shrink-0 truncate">{label(method)}</span>
+              <div className="flex-1 h-3 rounded bg-muted overflow-hidden">
+                <div className={cn('h-full', cell.breaks > 0 ? 'bg-destructive' : 'bg-primary/40')}
+                     style={{ width: `${Math.max(6, rate * 100)}%` }} />
+              </div>
+              <span className={cn('text-xs w-24 text-right tabular-nums',
+                cell.breaks > 0 ? 'text-destructive font-medium' : 'text-muted-foreground')}>
+                {cell.breaks}/{cell.attempts} broke
+              </span>
+            </div>
+          )
+        })}
+        {data.summary && <p className="text-xs text-muted-foreground mt-2">{data.summary}</p>}
+        <VulnerabilityInsights vulnerabilities={cov?.vulnerabilities ?? []} labelFor={label} />
+      </CardContent>
+    </Card>
+  )
+}
+
+// The shareable artifact: one OWASP LLM Top-10 scorecard bundling grades, coverage,
+// findings, and detector reliability — with a link to the full self-contained HTML page.
+const GRADE_BG: Record<string, string> = {
+  A: 'bg-primary text-primary-foreground', B: 'bg-primary/70 text-primary-foreground',
+  C: 'bg-secondary text-secondary-foreground', D: 'bg-orange-500 text-white',
+  F: 'bg-destructive text-destructive-foreground', 'N/A': 'bg-muted text-muted-foreground',
+}
+function ReportCardCard({ targets, fixedTarget }: { targets?: string[]; fixedTarget?: string }) {
+  const [selected, setSelected] = useState(fixedTarget || targets?.[0] || '')
+  const target = fixedTarget || selected
+  const { data: fetched } = useReportCard(target)
+  const full = useReportCardFull()
+  const [fullData, setFullData] = useState<ReportCard | null>(null)
+  // Full-assessment result (if run for this target) wins; else the passive fetch.
+  const data = (fullData && fullData.target_id === target) ? fullData : fetched
+  if (!fixedTarget && (!targets || targets.length === 0)) return null
+
+  async function runFull() {
+    try {
+      const r = await full.mutateAsync({ model: target })
+      setFullData(r)
+      toast[r.breaches > 0 ? 'error' : 'success'](
+        `Full assessment: grade ${r.overall_grade}, ${r.breaches} breach(es)`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Full assessment failed')
+    }
+  }
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h3 className="font-semibold">Security report card{fixedTarget ? ` · ${fixedTarget}` : ''}</h3>
+          {data && !data.error && (
+            <span className={cn('text-sm font-bold w-7 h-7 rounded flex items-center justify-center', GRADE_BG[data.overall_grade] || 'bg-muted')}>
+              {data.overall_grade}
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            {!fixedTarget && targets && (
+              <Select value={selected} onValueChange={setSelected}>
+                <SelectTrigger className="h-8 w-40"><SelectValue placeholder="target" /></SelectTrigger>
+                <SelectContent>
+                  {targets.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            )}
+            {target && (
+              <Button type="button" size="sm" variant="outline" onClick={runFull} disabled={full.isPending}
+                      title="Runs the live taxonomy scans (tool-abuse + harmful-content) and grades everything.">
+                {full.isPending ? 'Assessing…' : 'Run full assessment'}
+              </Button>
+            )}
+            {target && (
+              <a href={`/api/report-card.html?target_id=${encodeURIComponent(target)}`} target="_blank" rel="noreferrer"
+                 className="text-xs underline text-primary whitespace-nowrap">Open full report ↗</a>
+            )}
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {!data || data.error ? (
+          <p className="text-xs text-muted-foreground">
+            Run a staged campaign against this target to populate findings, then the OWASP report card fills in.
+          </p>
+        ) : (
+          <div className="grid gap-1.5">
+            <p className="text-xs text-muted-foreground">
+              {data.breaches} breach(es) · catalog coverage {data.coverage.coverage_pct}% · detector precision
+              {' '}{data.detector.precision} / recall {data.detector.recall}
+              {data.tool_abuse?.total ? ` · tool-abuse ${data.tool_abuse.breached}/${data.tool_abuse.total}` : ''}
+              {data.harm?.probes ? ` · harm ${data.harm.resistance_pct}% resist (${data.harm.complied}/${data.harm.probes})` : ''}
+            </p>
+            <div className="grid gap-1">
+              {data.owasp.map(r => (
+                <div key={r.owasp} className="flex items-center gap-2 text-xs">
+                  <span className={cn('w-6 text-center rounded font-bold', GRADE_BG[r.grade] || 'bg-muted')}>{r.grade}</span>
+                  <code className="text-muted-foreground w-14">{r.owasp}</code>
+                  <span className="flex-1 truncate">{r.title}</span>
+                  <span className="text-muted-foreground tabular-nums">{r.vulns_covered}/{r.vulns_total}</span>
+                  {r.breaches > 0 && <span className="text-destructive tabular-nums">{r.breaches}⚠</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// Beyond deepteam: sandboxed agentic tool-abuse (BOLA/BFLA/RBAC/SSRF/SQLi/shell/agency/
+// indirect). Tools are never executed — oracles judge from recorded call args.
+function ToolAbuseCard() {
+  const toolScan = useToolScan()
+  const [model, setModel] = useState('')
+  const [result, setResult] = useState<ToolScanResponse | null>(null)
+
+  async function run() {
+    try {
+      const r = await toolScan.mutateAsync(model ? { model } : {})
+      setResult(r)
+      toast[r.breached > 0 ? 'error' : 'success'](
+        r.breached > 0 ? `${r.breached}/${r.total} tool-abuse scenarios breached` : 'All scenarios held')
+    } catch (err) {
+      setResult(null)
+      toast.error(err instanceof Error ? err.message : 'Tool-abuse scan failed')
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <h3 className="font-semibold">Agentic tool-abuse (sandboxed)</h3>
+        <p className="text-xs text-muted-foreground">
+          BOLA · BFLA · RBAC · SSRF · SQLi · shell · excessive-agency · indirect-injection.
+          The model runs a tool-use loop; every call is recorded but <strong>never executed</strong>,
+          and a per-vulnerability oracle judges breach from the call arguments.
+        </p>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <div className="flex flex-wrap gap-2 items-end">
+          <div className="min-w-[200px]">
+            <label className="text-xs text-muted-foreground mb-1 block">Model (optional)</label>
+            <Input placeholder="gpt-5.4" value={model} onChange={e => setModel(e.target.value)} />
+          </div>
+          <Button type="button" onClick={run} disabled={toolScan.isPending}
+                  title="Runs a real reference-agent LLM (uses your key). Tools are never executed.">
+            {toolScan.isPending ? 'Running…' : 'Run tool-abuse scenarios'}
+          </Button>
+        </div>
+        {result && (
+          <div className="grid gap-1.5">
+            <div className="text-sm">
+              <span className={cn('font-semibold', result.breached > 0 ? 'text-destructive' : 'text-primary')}>
+                {result.breached}/{result.total} breached
+              </span>
+              <span className="text-xs text-muted-foreground"> · reference {result.model} · nothing executed</span>
+            </div>
+            {result.results.map(r => (
+              <div key={r.scenario_id} className="flex items-start gap-2 text-xs rounded border border-border p-2">
+                <Badge className={cn('text-[9px] uppercase',
+                  r.breached ? 'bg-destructive/15 text-destructive' : 'bg-primary/15 text-primary')}>
+                  {r.breached ? 'breach' : 'held'}
+                </Badge>
+                <span className="font-medium w-36 shrink-0">{r.category}</span>
+                <span className="text-muted-foreground">{r.breached ? r.detail : (r.transcript.at(-1) || '')}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// Typed vulnerability catalog (deepteam-style): how much of the risk surface the engine
+// can actually test, grouped by family, with the honest gaps called out.
+function VulnCatalogCard() {
+  const { data } = useVulnCatalog()
+  const [open, setOpen] = useState(false)
+  if (!data || data.error) return null
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h3 className="font-semibold">Vulnerability coverage</h3>
+          <Badge className={cn('text-[10px] uppercase',
+            data.coverage_pct >= 75 ? 'bg-primary/15 text-primary' : 'bg-secondary/15 text-secondary')}>
+            {data.covered}/{data.total} · {data.coverage_pct}%
+          </Badge>
+          <button type="button" onClick={() => setOpen(o => !o)}
+                  className="text-xs text-muted-foreground ml-auto underline">
+            {open ? 'hide' : 'details'}
+          </button>
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+          {data.groups.map(g => {
+            const full = g.covered === g.total
+            return (
+              <div key={g.group} className="rounded border border-border px-2 py-1.5">
+                <div className="text-xs font-medium truncate">{g.group}</div>
+                <div className={cn('text-xs tabular-nums',
+                  full ? 'text-primary' : g.covered === 0 ? 'text-destructive' : 'text-muted-foreground')}>
+                  {g.covered}/{g.total}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        {data.uncovered.length > 0 && (
+          <p className="text-xs text-muted-foreground">
+            Gaps (need a tool-execution harness): <code>{data.uncovered.join(', ')}</code>
+          </p>
+        )}
+        {open && (
+          <div className="grid gap-1 mt-1 max-h-72 overflow-y-auto">
+            {data.groups.flatMap(g => g.items).map(it => (
+              <div key={it.id} className="flex items-center gap-2 text-xs">
+                <span className={it.covered ? 'text-primary' : 'text-muted-foreground/50'}>
+                  {it.covered ? '✓' : '·'}
+                </span>
+                <Badge className={cn('text-[9px] uppercase',
+                  it.severity === 'high' ? 'bg-destructive/15 text-destructive'
+                    : it.severity === 'medium' ? 'bg-secondary/15 text-secondary'
+                    : 'bg-muted text-muted-foreground')}>{it.severity}</Badge>
+                <span className="text-muted-foreground w-14">{it.owasp}</span>
+                <span className="truncate">{it.name}</span>
+                <code className="text-muted-foreground/60 ml-auto text-[10px]">{it.group}</code>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// Trust signal: how accurate is the breach detector that decides every finding? Measured
+// as precision/recall on a labeled set of real responses (incl. hard-negative placeholders).
+function DetectorReliabilityCard() {
+  const { data } = useCalibration()
+  if (!data || data.error) return null
+  const perfect = data.fp === 0 && data.fn === 0
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h3 className="font-semibold">Breach-detector reliability</h3>
+          <Badge className={cn('text-[10px] uppercase',
+            perfect ? 'bg-primary/15 text-primary' : 'bg-secondary/15 text-secondary')}>
+            {perfect ? 'calibrated' : 'review'}
+          </Badge>
+          <span className="text-xs text-muted-foreground ml-auto tabular-nums">
+            precision {data.precision.toFixed(2)} · recall {data.recall.toFixed(2)} · F1 {data.f1.toFixed(2)}
+          </span>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <p className="text-xs text-muted-foreground">
+          Verified on {data.total} labeled real responses — {data.tp} true leaks caught,
+          {' '}{data.fn} missed, {data.fp} false alarms on redaction/placeholder decoys. Every
+          finding and leaderboard score rests on this detector.
+        </p>
+        {data.misclassified.length > 0 && (
+          <div className="mt-2 grid gap-1">
+            {data.misclassified.map((m, i) => (
+              <div key={i} className="text-xs text-destructive">
+                <code>{m.id}</code>: expected {m.expected}, got {m.predicted} — {m.note}
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// Confirmed vulnerabilities with the actual evidence: which technique broke the model,
+// the exact prompt, what the model returned, and the judge's reason.
+function VulnerabilityInsights({ vulnerabilities, labelFor }:
+    { vulnerabilities: import('@/hooks/useApi').Vulnerability[]; labelFor: (m: string) => string }) {
+  const [open, setOpen] = useState<number | null>(0)
+  if (vulnerabilities.length === 0) {
+    return <p className="text-xs text-muted-foreground mt-3 pt-3 border-t border-border">
+      No technique broke through — the target resisted every attack in this run.
+    </p>
+  }
+  const sevColor = (s: string) =>
+    s === 'high' ? 'bg-destructive/15 text-destructive'
+      : s === 'medium' ? 'bg-secondary/15 text-secondary'
+      : 'bg-muted text-muted-foreground'
+  return (
+    <div className="mt-3 pt-3 border-t border-border grid gap-2">
+      <p className="text-sm font-semibold">Confirmed vulnerabilities ({vulnerabilities.length})</p>
+      {vulnerabilities.map((v, i) => (
+        <div key={i} className="rounded border border-destructive/30 bg-destructive/[0.03]">
+          <button type="button" onClick={() => setOpen(open === i ? null : i)}
+                  className="w-full flex items-center gap-2 p-2.5 text-left">
+            <Badge className={cn('text-[10px] uppercase', sevColor(v.severity))}>{v.severity}</Badge>
+            <span className="text-sm font-medium">{labelFor(v.technique)}</span>
+            <span className="text-xs text-muted-foreground">→ {v.category} · {v.target_field}</span>
+            <code className="text-[10px] text-muted-foreground ml-auto">{v.attack_id}</code>
+          </button>
+          {open === i && (
+            <div className="px-2.5 pb-2.5 grid gap-2 text-xs">
+              <div>
+                <div className="text-muted-foreground mb-0.5">Attack that worked</div>
+                <pre className="whitespace-pre-wrap bg-muted/50 rounded p-2 max-h-40 overflow-y-auto">{v.payload || '—'}</pre>
+              </div>
+              <div>
+                <div className="text-muted-foreground mb-0.5">Model response</div>
+                <pre className="whitespace-pre-wrap bg-muted/50 rounded p-2 max-h-40 overflow-y-auto">{v.response || '—'}</pre>
+              </div>
+              {v.why && (
+                <div>
+                  <div className="text-muted-foreground mb-0.5">Why it's a breach</div>
+                  <p className="text-foreground/90">{v.why}</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   )
 }

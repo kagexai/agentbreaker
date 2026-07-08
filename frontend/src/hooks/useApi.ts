@@ -19,6 +19,7 @@ import {
   type LiveJudgeEvent,
   type LiveLogEvent,
   type LiveResultEvent,
+  type LivePipelineEvent,
 } from '@/lib/api'
 
 export function useOverview() {
@@ -162,6 +163,253 @@ export function useAddApi() {
   return useMutation({
     mutationFn: (payload: Record<string, unknown>) => postJson('/api/ops/add-api', payload),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['ops'] }),
+  })
+}
+
+// ── Discover ─────────────────────────────────────────────────────────────────
+
+export interface DiscoverCandidate {
+  id: string
+  kind: string
+  name: string
+  url?: string
+  model?: string
+  category?: string
+  status: string
+  authorized_by_design?: boolean
+  needs_verification?: boolean
+}
+
+export function useDiscover() {
+  return useQuery({
+    queryKey: ['discover'],
+    queryFn: () => getJson<{ candidates: DiscoverCandidate[] }>('/api/discover'),
+  })
+}
+
+export function useDiscoverRun() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: Record<string, unknown> = {}) => postJson('/api/discover/run', payload),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['discover'] }),
+  })
+}
+
+export function useDiscoverApprove() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: Record<string, unknown>) => postJson('/api/discover/approve', payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['discover'] })
+      qc.invalidateQueries({ queryKey: ['ops'] })
+      qc.invalidateQueries({ queryKey: ['overview'] })
+    },
+  })
+}
+
+// ── MCP hygiene scan ─────────────────────────────────────────────────────────
+
+export interface McpFinding {
+  id: string
+  severity: string
+  target: string
+  title: string
+  detail: string
+  remediation: string
+}
+
+export interface McpReport {
+  server: string
+  score: number
+  grade: string
+  auth_required: boolean
+  counts: { tools: number; resources: number; prompts: number }
+  findings: McpFinding[]
+}
+
+export function useMcpScan() {
+  return useMutation({
+    mutationFn: (payload: Record<string, unknown>) => postJson<McpReport>('/api/mcp/scan', payload),
+  })
+}
+
+export interface McpExploitResult {
+  reference_model: string
+  breached: boolean
+  injected_payload: string
+  tool_calls: { tool: string; args: Record<string, unknown>; executed: boolean }[]
+  transcript: string[]
+  detail: string
+  executed_any_tool: boolean
+}
+
+export function useMcpExploit() {
+  return useMutation({
+    mutationFn: (payload: Record<string, unknown>) => postJson<McpExploitResult>('/api/mcp/exploit', payload),
+  })
+}
+
+// ── Model safety leaderboard ──────────────────────────────────────────────────
+export interface SafetyOutcome {
+  id: string
+  category: string
+  resisted: boolean
+  response: string
+}
+
+export interface ModelSafetyReport {
+  model: string
+  resistance: number
+  grade: string
+  error: string
+  outcomes: SafetyOutcome[]
+}
+
+export interface ModelSafetyResponse {
+  generated_at: string
+  leaderboard: ModelSafetyReport[]
+  markdown: string
+}
+
+export function useModelSafety() {
+  return useMutation({
+    mutationFn: (payload: Record<string, unknown>) => postJson<ModelSafetyResponse>('/api/models/safety', payload),
+  })
+}
+
+// ── Breach-detector calibration (trust signal) ────────────────────────────────
+export interface CalibrationReport {
+  total: number
+  tp: number; fp: number; tn: number; fn: number
+  precision: number; recall: number; f1: number; accuracy: number
+  misclassified: { id: string; category: string; expected: string; predicted: string; note: string }[]
+  error?: string
+}
+
+export function useCalibration() {
+  return useQuery({
+    queryKey: ['calibration'],
+    queryFn: () => getJson<CalibrationReport>('/api/calibration'),
+    staleTime: 60_000,
+  })
+}
+
+// ── Typed vulnerability catalog + coverage ────────────────────────────────────
+export interface VulnItem {
+  id: string; name: string; group: string; severity: string; owasp: string
+  strategy_family: string; description: string; requires: string; covered: boolean
+}
+export interface VulnCatalog {
+  total: number; covered: number; coverage_pct: number
+  uncovered: string[]
+  groups: { group: string; total: number; covered: number; items: VulnItem[] }[]
+  error?: string
+}
+
+export function useVulnCatalog() {
+  return useQuery({
+    queryKey: ['vuln-catalog'],
+    queryFn: () => getJson<VulnCatalog>('/api/vulnerabilities'),
+    staleTime: 60_000,
+  })
+}
+
+// ── Sandboxed tool-abuse scenarios (agentic access control) ───────────────────
+export interface ToolAttackResult {
+  scenario_id: string; category: string; breached: boolean; detail: string
+  calls: { tool: string; args: Record<string, unknown>; executed: boolean }[]
+  transcript: string[]; reference_model: string; executed_any_tool: boolean
+}
+export interface ToolScanResponse {
+  generated_at: string; model: string; breached: number; total: number
+  results: ToolAttackResult[]
+}
+
+export function useToolScan() {
+  return useMutation({
+    mutationFn: (payload: Record<string, unknown>) => postJson<ToolScanResponse>('/api/tools/scan', payload),
+  })
+}
+
+// ── OWASP LLM Top-10 report card ──────────────────────────────────────────────
+export interface ReportCardOwaspRow {
+  owasp: string; title: string; tested: boolean
+  vulns_total: number; vulns_covered: number; breaches: number; grade: string
+}
+export interface ReportCard {
+  target_id: string; generated_at: string; overall_grade: string; breaches: number
+  owasp: ReportCardOwaspRow[]
+  findings: { category: string; severity?: string; techniques?: string[]; why?: string }[]
+  detector: { precision?: number; recall?: number; total?: number }
+  coverage: { covered?: number; total?: number; coverage_pct?: number }
+  tool_abuse?: { breached?: number; total?: number }
+  harm?: { complied?: number; probes?: number; resistance_pct?: number
+           categories?: { category: string; complied: number; probes: number }[] }
+  error?: string
+}
+
+export function useReportCard(targetId: string) {
+  return useQuery({
+    queryKey: ['report-card', targetId],
+    queryFn: () => getJson<ReportCard>(`/api/report-card?target_id=${encodeURIComponent(targetId)}`),
+    enabled: !!targetId,
+    refetchInterval: 8000,   // fill in shortly after a scan completes
+  })
+}
+
+// Full assessment: runs the live taxonomy scans (tool-abuse + harm) and returns one card.
+export function useReportCardFull() {
+  return useMutation({
+    mutationFn: (payload: Record<string, unknown>) => postJson<ReportCard>('/api/report-card/full', payload),
+  })
+}
+
+// ── Staged-pipeline report (attack-method coverage grid) ─────────────────────
+export interface StagedFinding {
+  target_field: string
+  category: string
+  best_composite: number
+  breached: boolean
+  experiments: number
+  severity?: string
+  owasp?: string
+  remediation?: string
+}
+
+export interface Vulnerability {
+  category: string
+  technique: string
+  severity: string
+  attack_id: string
+  target_field: string
+  payload: string
+  response: string
+  why: string
+  composite: number
+}
+
+export interface StagedReport {
+  target_id?: string
+  summary?: string
+  findings?: StagedFinding[]
+  coverage?: {
+    objectives?: number
+    objectives_attempted?: number
+    experiments_spent?: number
+    breaches?: number
+    replans?: number
+    method_matrix?: Record<string, { attempts: number; breaks: number }>
+    vulnerable_techniques?: { technique: string; breaks: number; attempts: number }[]
+    vulnerabilities?: Vulnerability[]
+  }
+}
+
+export function useStagedReport(targetId: string) {
+  return useQuery({
+    queryKey: ['staged-report', targetId],
+    queryFn: () => getJson<StagedReport>(`/api/ops/staged-report?target_id=${encodeURIComponent(targetId)}`),
+    enabled: !!targetId,
+    refetchInterval: 5000,
   })
 }
 
@@ -444,5 +692,10 @@ export function useLiveAttackStream(jobId: string | null) {
     [events]
   )
 
-  return { events, streamStatus, attacks, activeAttackId, stats, recentLogs, streamStartedAt: streamStartedAtRef.current }
+  const pipeline = useMemo(
+    () => events.filter(e => e.type === 'pipeline') as LivePipelineEvent[],
+    [events]
+  )
+
+  return { events, streamStatus, attacks, activeAttackId, stats, recentLogs, pipeline, streamStartedAt: streamStartedAtRef.current }
 }
