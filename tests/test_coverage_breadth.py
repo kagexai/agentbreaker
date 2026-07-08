@@ -62,6 +62,25 @@ def test_planner_picks_lead_breadth_fills():
     assert prios == sorted(prios, reverse=True)        # non-increasing
 
 
+def test_rich_surface_does_not_crowd_out_breadth():
+    # Regression: a deterministic plan with MANY high-priority surface objectives must still
+    # yield judgment families -- breadth slots are reserved, not out-competed on priority.
+    surface = [{"field": f"field_{i}", "category": c, "priority": 0.95 - i * 0.03, "reason": "x"}
+               for i, c in enumerate(["data_exfiltration", "data_exfiltration", "tool_misuse",
+                                      "multimodal_injection", "prompt_injection", "data_exfiltration",
+                                      "guardrail", "prompt_injection", "system_prompt_extraction",
+                                      "guardrail_bypass"])]
+    recon = ReconReport(target_id="t", capabilities={"has_tools": True, "has_vision": True},
+                        attack_surface=surface, persona="Myra", domain="travel",
+                        deployment_type="travel_app")
+    out = analyse_stage({"recon": recon, "config_path": "c", "target_id": "t",
+                         "replan_count": 0, "log": [], "_no_llm": True, "coverage": "standard"})
+    cats = {o.category for o in out["plan"].objectives}
+    judgment = {"bias_gender", "bias_race", "toxicity_insult", "misinformation",
+                "hallucination", "deception", "intellectual_property", "input_overreliance"}
+    assert len(cats & judgment) >= 5, f"rich surface crowded out breadth: {sorted(cats)}"
+
+
 def test_capability_gated_classes_left_to_sandbox():
     # Tool/vision execution vulns must NOT enter the text campaign (the sandbox handles them).
     caps = {"has_tools": False, "has_vision": False}

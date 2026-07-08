@@ -126,12 +126,14 @@ _CATEGORY_THEME = {
     "intellectual_property": "ip", "competitor_endorsement": "ip",
     "input_overreliance": "overreliance", "goal_theft": "agentic",
 }
-# Order themes so the highest-value / most-distinct classes are reached first at a modest
-# coverage target (extraction/pii usually already covered by app surface, so judgment
-# families are front-loaded here to guarantee they're tested).
-_THEME_ORDER = ["jailbreak", "harmful", "pii", "bias", "toxicity", "misinfo", "hallucination",
-                "injection", "deception", "ip", "overreliance", "extraction", "data",
-                "agentic", "other"]
+# Order themes so breadth fill front-loads the classes the planner will NOT pick on its own.
+# The planner (LLM or surface-derived) already proposes extraction/data/pii/injection/tool
+# objectives for an app, and jailbreak/harmful for a bare model — so those are usually
+# covered. The judgment families (bias/toxicity/misinformation/hallucination/deception/IP/
+# overreliance) are the ones that never got tested, so the scarce breadth slots go there first.
+_THEME_ORDER = ["bias", "toxicity", "misinfo", "hallucination", "deception", "ip",
+                "overreliance", "harmful", "jailbreak", "pii", "injection", "extraction",
+                "data", "agentic", "other"]
 
 
 def _catalog_objectives(capabilities: dict[str, bool]) -> list[AttackObjective]:
@@ -171,15 +173,19 @@ def _catalog_objectives(capabilities: dict[str, bool]) -> list[AttackObjective]:
 
 
 def _ensure_taxonomy_coverage(plan: "AttackPlan", capabilities: dict[str, bool],
-                              target: int) -> "AttackPlan":
-    """Fill the plan with catalog objectives for any uncovered vulnerability class, so a scan
-    covers breadth, not just the planner's few. Planner picks (higher priority) stay first;
-    breadth fills the remainder up to `target`."""
-    have = {o.category for o in plan.objectives}
-    plan.objectives.extend(o for o in _catalog_objectives(capabilities) if o.category not in have)
+                              target: int, planner_cap: int) -> "AttackPlan":
+    """Guarantee the scan spans the taxonomy by RESERVING breadth slots. The planner's top
+    picks are capped at `planner_cap` so its (often many, high-priority) objectives can't
+    crowd out breadth; the remaining slots up to `target` are filled with catalog classes the
+    planner didn't cover (judgment families first). Without the reservation, a deterministic
+    plan with 10 high-priority surface objectives leaves zero room for bias/toxicity/misinfo."""
+    picks = sorted(plan.objectives, key=lambda o: o.priority, reverse=True)[:max(1, planner_cap)]
+    have = {o.category for o in picks}
+    breadth = [o for o in _catalog_objectives(capabilities) if o.category not in have]
+    merged = picks + breadth[:max(0, target - len(picks))]
     seen: set[tuple[str, str]] = set()
     uniq: list[AttackObjective] = []
-    for o in sorted(plan.objectives, key=lambda o: o.priority, reverse=True):
+    for o in merged:
         key = (o.target_field, o.category)
         if key in seen:
             continue
@@ -394,7 +400,9 @@ def analyse_stage(state: dict[str, Any]) -> dict[str, Any]:
 
     # Breadth: span the vulnerability taxonomy up to the coverage target, so a scan tests
     # bias/toxicity/misinformation/harmful/IP/etc. -- not just the planner's extraction picks.
-    plan = _ensure_taxonomy_coverage(plan, capabilities, target)
+    # Reserve breadth slots: cap the planner's picks at llm_cap so its (often many, high-
+    # priority) objectives can't crowd out the judgment families.
+    plan = _ensure_taxonomy_coverage(plan, capabilities, target, planner_cap=llm_cap)
 
     log = list(state.get("log", []))
     log.append(f"[analyse] {plan.rationale} ({len(plan.objectives)} objectives)")
