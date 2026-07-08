@@ -95,7 +95,7 @@ export function Ops() {
   const [autonomous, setAutonomous] = useState(false)
   const [dryRun, setDryRun] = useState(false)
   const [shortPrompt, setShortPrompt] = useState(false)
-  const [engine, setEngine] = useState('belief')
+  const [engine, setEngine] = useState('staged')
   const [attacker, setAttacker] = useState('agent')
 
   // Add target form state
@@ -324,8 +324,8 @@ export function Ops() {
                         <SelectValue placeholder="Engine…" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="belief">Belief loop (default)</SelectItem>
-                        <SelectItem value="staged">Staged agents (recon→analyse→attack→report)</SelectItem>
+                        <SelectItem value="staged">Staged campaign (recommended — full taxonomy sweep)</SelectItem>
+                        <SelectItem value="belief">Deep extraction / CTF (belief loop)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
