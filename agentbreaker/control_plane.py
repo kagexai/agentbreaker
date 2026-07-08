@@ -3864,6 +3864,13 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._send_json({"error": str(exc)})
             return
+        if path == "/api/multimodal/status":
+            try:
+                from .multimodal import backends_status
+                self._send_json(backends_status())
+            except Exception as exc:
+                self._send_json({"error": str(exc)})
+            return
         if path == "/api/evaluators":
             try:
                 from .evaluators import detector_coverage
