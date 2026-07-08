@@ -345,7 +345,27 @@ export interface ReportCard {
   tool_abuse?: { breached?: number; total?: number }
   harm?: { complied?: number; probes?: number; resistance_pct?: number
            categories?: { category: string; complied: number; probes: number }[] }
+  frameworks?: FrameworkView
   error?: string
+}
+
+// ── Compliance framework mappings (NIST / MITRE ATLAS / EU AI Act / OWASP Agentic) ──
+export interface FrameworkCategory {
+  category: string; classes: number; breached: number
+  breached_ids: string[]; status: 'pass' | 'fail'
+}
+export interface FrameworkResult {
+  name: string; description: string
+  categories: FrameworkCategory[]; total_breaches: number; status: 'pass' | 'fail'
+}
+export type FrameworkView = Record<string, FrameworkResult>
+
+export function useFrameworks() {
+  return useQuery({
+    queryKey: ['frameworks'],
+    queryFn: () => getJson<FrameworkView>('/api/frameworks'),
+    staleTime: 60_000,
+  })
 }
 
 export function useReportCard(targetId: string) {

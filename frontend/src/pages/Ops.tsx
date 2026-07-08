@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useOps, useLaunchScan, useAddTarget, useRemoveTarget, useStopJob, useAddApi, useDiscover, useDiscoverRun, useDiscoverApprove, useMcpScan, useMcpExploit, useModelSafety, useStagedReport, useCalibration, useVulnCatalog, useToolScan, useReportCard, useReportCardFull, type McpReport, type McpExploitResult, type ModelSafetyResponse, type ToolScanResponse, type ReportCard } from '@/hooks/useApi'
+import { useOps, useLaunchScan, useAddTarget, useRemoveTarget, useStopJob, useAddApi, useDiscover, useDiscoverRun, useDiscoverApprove, useMcpScan, useMcpExploit, useModelSafety, useStagedReport, useCalibration, useVulnCatalog, useToolScan, useReportCard, useReportCardFull, useFrameworks, type McpReport, type McpExploitResult, type ModelSafetyResponse, type ToolScanResponse, type ReportCard } from '@/hooks/useApi'
 import { LiveAttackPanel } from '@/components/LiveAttackPanel'
 import { StatCards } from '@/components/StatCards'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -743,6 +743,7 @@ export function Ops() {
         <TabsContent value="models" className="grid gap-6">
           <ReportCardCard targets={llmTargets.map(t => t.target_id)} />
           <VulnCatalogCard />
+          <FrameworkComplianceCard />
           <ToolAbuseCard />
           <DetectorReliabilityCard />
           <Card>
@@ -1229,6 +1230,20 @@ function ReportCardCard({ targets, fixedTarget }: { targets?: string[]; fixedTar
                 </div>
               ))}
             </div>
+            {data.frameworks && Object.keys(data.frameworks).length > 0 && (
+              <div className="flex flex-wrap gap-1.5 pt-1 border-t border-border mt-1">
+                <span className="text-xs text-muted-foreground w-full">Framework compliance</span>
+                {Object.values(data.frameworks).map(fw => (
+                  <span key={fw.name} title={fw.description}
+                    className={cn('text-[10px] rounded px-1.5 py-0.5 border',
+                      fw.status === 'pass'
+                        ? 'border-primary/40 text-primary bg-primary/10'
+                        : 'border-destructive/40 text-destructive bg-destructive/10')}>
+                    {fw.name} {fw.status === 'pass' ? '✓' : `${fw.total_breaches}⚠`}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </CardContent>
@@ -1360,6 +1375,63 @@ function VulnCatalogCard() {
             ))}
           </div>
         )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// Compliance framework mapping: every catalog class rolled up to NIST AI RMF / MITRE ATLAS /
+// EU AI Act / OWASP Agentic risk categories. Shows the static mapping (and live pass/fail when
+// a scan's breaches are folded in via the report card).
+function FrameworkComplianceCard() {
+  const { data } = useFrameworks()
+  const [open, setOpen] = useState(false)
+  if (!data || (data as { error?: string }).error) return null
+  const frameworks = Object.values(data)
+  if (!frameworks.length) return null
+  const totalBreaches = frameworks.reduce((n, f) => n + f.total_breaches, 0)
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h3 className="font-semibold">Framework compliance</h3>
+          <Badge className={cn('text-[10px] uppercase',
+            totalBreaches === 0 ? 'bg-primary/15 text-primary' : 'bg-destructive/15 text-destructive')}>
+            {totalBreaches === 0 ? 'mapped' : `${totalBreaches} breach(es)`}
+          </Badge>
+          <button type="button" onClick={() => setOpen(o => !o)}
+                  className="text-xs text-muted-foreground ml-auto underline">
+            {open ? 'hide' : 'details'}
+          </button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Every catalog class mapped to NIST AI RMF · MITRE ATLAS · EU AI Act · OWASP Agentic.
+        </p>
+      </CardHeader>
+      <CardContent className="grid gap-2 sm:grid-cols-2">
+        {frameworks.map(fw => (
+          <div key={fw.name} className="rounded border border-border p-2">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium truncate">{fw.name}</span>
+              <Badge className={cn('text-[9px] uppercase ml-auto',
+                fw.status === 'pass' ? 'bg-primary/15 text-primary' : 'bg-destructive/15 text-destructive')}>
+                {fw.status === 'pass' ? 'pass' : `fail · ${fw.total_breaches}`}
+              </Badge>
+            </div>
+            <div className="flex flex-wrap gap-1 mt-1.5">
+              {fw.categories.map(c => (
+                <span key={c.category} title={c.breached_ids.join(', ') || `${c.classes} classes`}
+                  className={cn('text-[10px] rounded px-1.5 py-0.5 border tabular-nums',
+                    c.breached
+                      ? 'border-destructive/40 text-destructive bg-destructive/10'
+                      : 'border-border text-muted-foreground')}>
+                  {c.category} <span className="opacity-70">{c.breached ? `${c.breached}/${c.classes}` : c.classes}</span>
+                </span>
+              ))}
+            </div>
+            {open && <p className="text-[10px] text-muted-foreground mt-1.5">{fw.description}</p>}
+          </div>
+        ))}
       </CardContent>
     </Card>
   )
