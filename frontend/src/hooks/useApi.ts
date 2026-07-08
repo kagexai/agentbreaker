@@ -168,45 +168,6 @@ export function useAddApi() {
 
 // ── Discover ─────────────────────────────────────────────────────────────────
 
-export interface DiscoverCandidate {
-  id: string
-  kind: string
-  name: string
-  url?: string
-  model?: string
-  category?: string
-  status: string
-  authorized_by_design?: boolean
-  needs_verification?: boolean
-}
-
-export function useDiscover() {
-  return useQuery({
-    queryKey: ['discover'],
-    queryFn: () => getJson<{ candidates: DiscoverCandidate[] }>('/api/discover'),
-  })
-}
-
-export function useDiscoverRun() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (payload: Record<string, unknown> = {}) => postJson('/api/discover/run', payload),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['discover'] }),
-  })
-}
-
-export function useDiscoverApprove() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (payload: Record<string, unknown>) => postJson('/api/discover/approve', payload),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['discover'] })
-      qc.invalidateQueries({ queryKey: ['ops'] })
-      qc.invalidateQueries({ queryKey: ['overview'] })
-    },
-  })
-}
-
 // ── MCP hygiene scan ─────────────────────────────────────────────────────────
 
 export interface McpFinding {
