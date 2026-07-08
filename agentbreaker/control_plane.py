@@ -3856,6 +3856,14 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._send_json({"error": str(exc)})
             return
+        if path == "/api/guardrails/redteam":
+            try:
+                from .guardrails import red_team_guards
+                qs = parse_qs(parsed.query)
+                self._send_json(red_team_guards(qs.get("corpus", ["known_jailbreaks"])[0]))
+            except Exception as exc:
+                self._send_json({"error": str(exc)})
+            return
         if path == "/api/evaluators":
             try:
                 from .evaluators import detector_coverage
