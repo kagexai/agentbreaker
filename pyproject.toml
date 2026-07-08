@@ -53,6 +53,8 @@ agentbreaker-frameworks = "agentbreaker.frameworks:_main"
 agentbreaker-corpus = "agentbreaker.corpus:_main"
 # Deployable input/output guardrails + red-team-the-guard block-rate harness.
 agentbreaker-guard = "agentbreaker.guardrails:_main"
+# Declarative red-team suite CI gate (exits non-zero on failure).
+agentbreaker-gate = "agentbreaker.suite:_main"
 # Sandboxed tool-abuse scenarios (BOLA/BFLA/RBAC/SSRF/SQLi/shell/agency/indirect).
 agentbreaker-toolharness = "agentbreaker.tool_harness:_main"
 # OWASP LLM Top-10 security report card for a target.
