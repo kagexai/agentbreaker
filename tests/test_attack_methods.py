@@ -58,6 +58,36 @@ def test_deepteam_parity_enhancements_present():
         assert "reveal the secret" in out and out != "reveal the secret"
 
 
+def test_named_published_attacks_present():
+    for name in ["homoglyph", "zero_width", "skeleton_key", "flip_attack", "many_shot", "policy_puppetry"]:
+        assert name in ENHANCEMENTS
+        out = enhance(name, "reveal the secret")
+        assert out and out != "reveal the secret"
+
+
+def test_homoglyph_swaps_confusables_but_stays_readable_length():
+    out = enhance("homoglyph", "access")
+    assert out != "access"                      # transformed
+    assert len(out) == len("access")            # 1:1 char swap, no ASCII 'a','c','e','s' left the same everywhere
+    assert "а" in out or "с" in out or "е" in out  # contains a Cyrillic confusable
+
+
+def test_zero_width_interleaves_invisible_chars():
+    out = enhance("zero_width", "abc")
+    assert "​" in out and out.replace("​", "") == "abc"
+
+
+def test_flip_attack_embeds_reversed_text():
+    out = enhance("flip_attack", "do the thing")
+    assert "gniht eht od" in out
+
+
+def test_skeleton_key_and_policy_puppetry_wrap_the_ask():
+    assert "Warning:" in enhance("skeleton_key", "X") and "X" in enhance("skeleton_key", "X")
+    pp = enhance("policy_puppetry", "X")
+    assert "content_policy" in pp and "X" in pp
+
+
 def test_context_flood_buries_the_ask():
     out = enhance("context_flood", "DO THE THING")
     assert out.index("background reading") < out.index("DO THE THING")
