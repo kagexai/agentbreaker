@@ -57,6 +57,13 @@ def run_staged_campaign(
 
     final = run_pipeline(bb)
 
+    # Full-surface sweep: alongside the campaign, run the harm taxonomy + sandboxed tool-abuse
+    # + safety probes so ONE scan covers what deepteam's red_team() does (not just the campaign
+    # categories). Skipped for 'quick' (keep it fast); best-effort so a scanner failure never
+    # sinks the run. Persisted for the report card to fold in.
+    if str(coverage).lower() != "quick":
+        _run_supplemental_scans(bb, target_id, config_path, campaign_tag)
+
     for line in final.get("log", []):
         print(line)
 
@@ -76,6 +83,60 @@ def run_staged_campaign(
         return 0 if not report.findings else 0
     print("[staged] pipeline produced no report")
     return 1
+
+
+def _run_supplemental_scans(bb: Any, target_id: str, config_path: str | Path,
+                            campaign_tag: str | None) -> None:
+    """Run harm-taxonomy + sandboxed tool-abuse + safety probes CONCURRENTLY alongside the
+    campaign and persist the merged result, so one scan covers the full surface. Each scanner
+    is best-effort: a failure (e.g. no provider key) is logged and omitted, never fatal."""
+    import json
+    from concurrent.futures import ThreadPoolExecutor
+    from .. import artifact_paths
+    from .live import stage as _stage
+
+    cfg = str(config_path)
+
+    def _harm():
+        from ..harm_taxonomy import run_harm_scan
+        return run_harm_scan(target_id, cfg)
+
+    def _tools():
+        from ..tool_harness import run_all_scenarios
+        results = run_all_scenarios(target_id)
+        return {"breached": sum(1 for r in results if r.breached), "total": len(results),
+                "results": [r.to_dict() for r in results]}
+
+    def _safety():
+        from ..model_safety import provider_callback, probe_model
+        return probe_model(target_id, provider_callback(target_id, cfg)).to_dict()
+
+    _stage(bb, "sweep", "start", "harm taxonomy + tool-abuse sandbox + safety probes")
+    jobs = {"harm": _harm, "tool_abuse": _tools, "safety": _safety}
+    out: dict[str, Any] = {}
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        futures = {k: ex.submit(fn) for k, fn in jobs.items()}
+        for k, fut in futures.items():
+            try:
+                out[k] = fut.result()
+            except Exception as exc:
+                logger.warning("supplemental %s scan skipped: %s", k, exc)
+
+    try:
+        path = artifact_paths.supplemental_scans_path(target_id, campaign_tag)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(out, indent=2))
+        tmp.replace(path)
+    except Exception:
+        logger.warning("could not persist supplemental scans", exc_info=True)
+
+    harm = out.get("harm") or {}
+    tool = out.get("tool_abuse") or {}
+    _stage(bb, "sweep", "done",
+           f"harm {harm.get('complied', 0)}/{harm.get('probes', 0)} · "
+           f"tool-abuse {tool.get('breached', 0)}/{tool.get('total', 0)} · "
+           f"safety {(out.get('safety') or {}).get('resistance', '—')}")
 
 
 def _persist_report(report: Any, target_id: str, campaign_tag: str | None) -> None:

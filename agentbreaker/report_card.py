@@ -216,6 +216,21 @@ def _load_staged_findings(target_id: str, tag: str | None) -> list[dict[str, Any
         return []
 
 
+def _load_supplemental(target_id: str, tag: str | None) -> dict[str, Any]:
+    """Read the persisted harm + tool-abuse + safety sweep run alongside the campaign, if
+    present. Returns {"harm": {...}, "tool_abuse": {...}, "safety": {...}} (any subset)."""
+    try:
+        import json
+        from .artifact_paths import supplemental_scans_path
+        p = supplemental_scans_path(target_id, tag)
+        if not p.exists():
+            return {}
+        data = json.loads(p.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 def _main(argv: list[str] | None = None) -> int:
     import argparse
     import json as _json

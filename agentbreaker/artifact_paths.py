@@ -68,3 +68,9 @@ def staged_report_path(target_id: str | None = None, campaign_tag: str | None = 
 
 def live_events_path(target_id: str | None = None, campaign_tag: str | None = None) -> Path:
     return artifact_root(target_id, campaign_tag) / "live_events.jsonl"
+
+
+def supplemental_scans_path(target_id: str | None = None, campaign_tag: str | None = None) -> Path:
+    """Persisted harm-taxonomy + tool-abuse + safety-probe results run alongside the campaign,
+    so one scan covers the full surface and the report card reflects it."""
+    return artifact_root(target_id, campaign_tag) / "supplemental_scans.json"

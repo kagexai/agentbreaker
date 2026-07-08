@@ -1730,11 +1730,17 @@ def _build_report_card(target_id: str, campaign_tag: str | None):
     target_id = (target_id or "").strip()
     if not target_id:
         return None
-    from .report_card import build_report_card, _load_staged_findings
+    from .report_card import build_report_card, _load_staged_findings, _load_supplemental
     findings = _load_staged_findings(target_id, campaign_tag)
     if not findings:
         findings = _target_findings_for_card(target_id, campaign_tag)
-    return build_report_card(target_id, generated_at=_now_iso(), findings=findings)
+    # Fold in the harm + tool-abuse + safety sweep the scan persisted (no live calls), so the
+    # auto report card reflects the full surface, not just the campaign categories.
+    supp = _load_supplemental(target_id, campaign_tag)
+    return build_report_card(target_id, generated_at=_now_iso(), findings=findings,
+                             tool_abuse=supp.get("tool_abuse") or None,
+                             harm=supp.get("harm") or None,
+                             safety=supp.get("safety") or None)
 
 
 def _report_card_full(payload: dict[str, Any]) -> dict[str, Any]:
