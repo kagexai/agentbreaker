@@ -223,6 +223,12 @@ class CostTracker:
 class AuditLogger:
     """Append-only JSONL audit trail. Written by target.py only."""
 
+    # Process-wide lock guarding appends. The staged engine runs objectives concurrently,
+    # each with its OWN engine -> its OWN AuditLogger instance writing to the SAME file; a
+    # per-instance lock would not serialize those cross-instance appends, so lines could
+    # interleave and corrupt the JSONL. One class-level lock serializes all writers.
+    _APPEND_LOCK = threading.Lock()
+
     def __init__(self, path: Path | None = None):
         # Resolve the audit-log path from the environment at instantiation, NOT from the
         # import-time module constant. The campaign configures AGENTBREAKER_AUDIT_LOG per
@@ -306,7 +312,7 @@ class AuditLogger:
                 "response_gradient": scores.response_gradient,
                 "partial_leak_detected": scores.partial_leak_detected,
             }
-        with self._lock:
+        with AuditLogger._APPEND_LOCK:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with open(self._path, "a") as f:
                 f.write(json.dumps(entry) + "\n")
@@ -319,7 +325,7 @@ class AuditLogger:
             "probe": probe[:500],
             "response": response[:2000],
         }
-        with self._lock:
+        with AuditLogger._APPEND_LOCK:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with open(self._path, "a") as f:
                 f.write(json.dumps(entry) + "\n")

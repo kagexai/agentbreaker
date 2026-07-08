@@ -239,6 +239,13 @@ def _configure_artifact_paths(target_id: str, campaign_tag: str | None) -> None:
     VALIDATION_REPORT_PATH = validation_report_path(target_id, campaign_tag)
     PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
     _AUDIT_CACHE = {"path": None, "mtime": None, "entries": []}
+    # In-process runs (belief + staged engines) create the harness's AuditLogger inside this
+    # process, so it must see the per-tag audit path via the env (subprocesses get it via
+    # _child_env). Without this the harness writes to the import-time default (root
+    # attack_log.jsonl) while results/findings go per-tag — a split brain that leaves the
+    # tag's audit log empty and the UI metrics blank.
+    os.environ["AGENTBREAKER_AUDIT_LOG"] = str(ATTACK_LOG_PATH)
+    os.environ["AGENTBREAKER_TARGET_ID"] = target_id
 
 
 def _get_campaign_db() -> "sqlite3.Connection | None":
@@ -271,6 +278,12 @@ def _child_env(target_id: str, config_path: Path | None = None) -> dict[str, str
 
 
 def _bootstrap_legacy_artifacts(target_id: str) -> None:
+    # A named campaign tag is a fresh, isolated run — it must NOT inherit the old flat-layout
+    # root logs, or every new tag starts pre-seeded with stale attacks (contaminating its
+    # results.tsv, findings, coverage, and the UI). Legacy migration only applies to the
+    # default (untagged) per-target location.
+    if os.environ.get("AGENTBREAKER_CAMPAIGN_TAG"):
+        return
     if RESULTS_PATH == _LEGACY_RESULTS_PATH and ATTACK_LOG_PATH == _LEGACY_AUDIT_LOG_PATH:
         return
 
@@ -2463,14 +2476,67 @@ def _choose_strategy(
     return fallback, attempts_by_strategy.get(fallback, 0), anchor_payload, None
 
 
-def _next_attack_id() -> str:
+def _iter_audit_log_files() -> list[Path]:
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in [ROOT / "attack_log.jsonl", *(ROOT / "artifacts").rglob("attack_log.jsonl")]:
+        resolved = candidate.resolve()
+        if resolved in seen or not candidate.exists():
+            continue
+        seen.add(resolved)
+        paths.append(candidate)
+    return paths
+
+
+def _audit_log_max_id() -> int:
+    """Highest ATK id present in any attack_log.jsonl.
+
+    Every experiment writes to the audit log immediately, whereas results.tsv/findings
+    only capture attempts that scored high enough to persist. Allocating ids solely from
+    the latter means a run of refusals (all 'discard') never advances the counter, so
+    distinct payloads reuse the same id. Fold the audit log in so each experiment gets a
+    unique id regardless of its score.
+    """
     max_id = 0
-    pattern = re.compile(r"^ATK-(\d{5})$")
-    for attack_id in _existing_attack_ids_global():
-        match = pattern.match(attack_id)
-        if match:
-            max_id = max(max_id, int(match.group(1)))
-    return f"ATK-{max_id + 1:05d}"
+    pattern = re.compile(r'"attack_id":\s*"ATK-(\d{5})"')
+    for path in _iter_audit_log_files():
+        try:
+            with path.open() as fh:
+                for line in fh:
+                    match = pattern.search(line)
+                    if match:
+                        max_id = max(max_id, int(match.group(1)))
+        except OSError:
+            continue
+    return max_id
+
+
+# In-process high-water mark. Guarantees ids are strictly monotonic within a single
+# campaign process even if two ids are allocated before the first one's audit-log write is
+# flushed and visible on disk (the belief engine allocates rapidly in decide + PAIR
+# refinement). Files remain the source of truth across processes; this only ever raises the
+# floor, never lowers it. Reset in tests that assert absolute id values.
+_ID_HIGH_WATER = 0
+# Serializes id allocation. The staged engine runs objectives concurrently, each calling
+# _next_attack_id(); without this lock two threads could read the same high-water mark and
+# hand out the SAME id -> the exact reuse bug this counter was built to prevent.
+_ID_LOCK = threading.Lock()
+
+
+def _next_attack_id() -> str:
+    global _ID_HIGH_WATER
+    with _ID_LOCK:
+        max_id = 0
+        pattern = re.compile(r"^ATK-(\d{5})$")
+        for attack_id in _existing_attack_ids_global():
+            match = pattern.match(attack_id)
+            if match:
+                max_id = max(max_id, int(match.group(1)))
+        # Also honour the audit log: an experiment that scored 'discard' is written there but
+        # not to results.tsv/findings, so without this the id would not advance past it.
+        max_id = max(max_id, _audit_log_max_id(), _ID_HIGH_WATER)
+        _ID_HIGH_WATER = max_id + 1
+        return f"ATK-{max_id + 1:05d}"
 
 
 def _extract_results(stdout: str) -> dict[str, Any]:
@@ -2518,7 +2584,12 @@ def _infer_status(result: dict[str, Any]) -> str:
 
 def _append_result(result: dict[str, Any], status: str, commit_ref: str) -> None:
     attack_id = result["attack_id"]
-    if attack_id in _existing_attack_ids():
+    # Dedup against results.tsv (the same source _next_attack_id() allocates from),
+    # NOT the campaign DB. The DB persists across runs and is scoped by target+tag, so
+    # a DB-based guard can diverge from results.tsv: if the id is in the DB but missing
+    # from results.tsv (e.g. the TSV was reset while campaign.db survived), the row would
+    # never be written and _next_attack_id() would hand out the same id forever.
+    if attack_id in {row.get("attack_id", "") for row in _raw_result_rows()}:
         return
 
     row = "\t".join(
@@ -2879,17 +2950,9 @@ def _load_campaign_generator(
 
 
 def main() -> int:
-    # Deprecation notice for direct invocation
-    if os.environ.get("AGENTBREAKER_SUPPRESS_DEPRECATION") != "1":
-        import sys as _sys
-        print(
-            "⚠  Direct invocation of campaign.py is deprecated.\n"
-            "   Use: python3 agentbreaker.py run <target-id> --loop\n",
-            file=_sys.stderr,
-        )
     parser = argparse.ArgumentParser(
         prog="agentbreaker.campaign",
-        description="Autonomous campaign runner. Prefer `agentbreaker run ...` for the unified operator CLI.",
+        description="Autonomous campaign runner (launched by the control plane).",
     )
     parser.add_argument("--target", required=True, help="Target id from target_config.yaml")
     parser.add_argument("--config", default=str(ROOT / "target_config.yaml"),
@@ -2906,6 +2969,14 @@ def main() -> int:
     parser.add_argument("--short-prompt", action="store_true", help="Use short single-sentence prompts")
     parser.add_argument("--legacy-engine", action="store_true",
                         help="Use the legacy subprocess-based campaign loop instead of the new in-process engine")
+    parser.add_argument("--engine", choices=["belief", "staged"], default="belief",
+                        help="Attack engine: 'belief' (default in-process loop) or 'staged' "
+                             "(recon→analyse→attack→report multi-agent pipeline)")
+    parser.add_argument("--max-replans", type=int, default=2,
+                        help="Staged engine only: max Attack→Analyse loop-backs")
+    parser.add_argument("--attacker", choices=["engine", "agent"], default="agent",
+                        help="Staged engine only: 'agent' (LLM reason→craft→reflect loop, "
+                             "default) or 'engine' (legacy template-capable belief loop)")
     args = parser.parse_args()
 
     _configure_artifact_paths(args.target, args.campaign_tag)
@@ -2954,7 +3025,19 @@ def main() -> int:
             print("[campaign] Profiling complete; attack step skipped by flag.")
             return 0
 
-        if not args.legacy_engine:
+        if args.engine == "staged" and not args.legacy_engine:
+            # ── Staged multi-agent pipeline (recon → analyse → attack → report) ──
+            from .agents import run_staged_campaign
+            exit_code = run_staged_campaign(
+                target_id=args.target,
+                config_path=config_path,
+                profile=profile,
+                campaign_tag=args.campaign_tag,
+                max_experiments=args.max_steps or 50,
+                max_replans=args.max_replans,
+                attacker=args.attacker,
+            )
+        elif not args.legacy_engine:
             # ── New in-process engine ──
             from .campaign_engine import CampaignEngine
             engine = CampaignEngine(
