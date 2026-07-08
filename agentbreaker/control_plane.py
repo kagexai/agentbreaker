@@ -4051,6 +4051,11 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             if path == "/api/corpus/scan":
                 self._send_json(_corpus_scan(payload), status=201)
                 return
+            if path == "/api/code/scan":
+                from .code_scanner import scan_code_report
+                self._send_json(scan_code_report(str(payload.get("code", "")),
+                                                 language=str(payload.get("language", "python"))), status=201)
+                return
             if path == "/api/report-card/full":
                 self._send_json(_report_card_full(payload), status=201)
                 return

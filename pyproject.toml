@@ -55,6 +55,8 @@ agentbreaker-corpus = "agentbreaker.corpus:_main"
 agentbreaker-guard = "agentbreaker.guardrails:_main"
 # Declarative red-team suite CI gate (exits non-zero on failure).
 agentbreaker-gate = "agentbreaker.suite:_main"
+# Static scanner for LLM-generated code (secrets/exec/deserialization/SQLi/crypto/pkg-hallucination).
+agentbreaker-codescan = "agentbreaker.code_scanner:_main"
 # Sandboxed tool-abuse scenarios (BOLA/BFLA/RBAC/SSRF/SQLi/shell/agency/indirect).
 agentbreaker-toolharness = "agentbreaker.tool_harness:_main"
 # OWASP LLM Top-10 security report card for a target.
