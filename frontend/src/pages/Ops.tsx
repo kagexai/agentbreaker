@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useOps, useLaunchScan, useAddTarget, useRemoveTarget, useStopJob, useAddApi, useMcpScan, useMcpExploit, useModelSafety, useStagedReport, useCalibration, useVulnCatalog, useToolScan, useReportCard, useReportCardFull, useFrameworks, type McpReport, type McpExploitResult, type ModelSafetyResponse, type ToolScanResponse, type ReportCard } from '@/hooks/useApi'
+import { useOps, useLaunchScan, useAddTarget, useRemoveTarget, useStopJob, useAddApi, useMcpScan, useMcpExploit, useModelSafety, useStagedReport, useCalibration, useVulnCatalog, useToolScan, useReportCard, useReportCardFull, useFrameworks, useCorpora, useCorpusScan, useGuardrailRedteam, useCodeScan, type McpReport, type McpExploitResult, type ModelSafetyResponse, type ToolScanResponse, type ReportCard } from '@/hooks/useApi'
 import { LiveAttackPanel } from '@/components/LiveAttackPanel'
 import { StatCards } from '@/components/StatCards'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -663,7 +663,10 @@ export function Ops() {
         {/* ── Assess tab (report card + taxonomy sweep + methodology) ── */}
         <TabsContent value="assess" className="grid gap-6">
           <ReportCardCard targets={llmTargets.map(t => t.target_id)} />
+          <CorpusBenchmarkCard targets={llmTargets.map(t => t.target_id)} />
           <ToolAbuseCard />
+          <GuardrailCard />
+          <CodeScanCard />
           <MethodologyCard />
 
           <Card>
@@ -1322,6 +1325,202 @@ function MethodologyCard() {
           )}
         </CardContent>
       )}
+    </Card>
+  )
+}
+
+// Seed-corpus benchmark: replay a bundled known-attack dataset against a target and show the
+// reproducible resistance %, broken down by named technique.
+function CorpusBenchmarkCard({ targets }: { targets: string[] }) {
+  const { data: corpora } = useCorpora()
+  const scan = useCorpusScan()
+  const [target, setTarget] = useState(targets[0] || '')
+  const [corpus, setCorpus] = useState('known_jailbreaks')
+  const [result, setResult] = useState<import('@/hooks/useApi').CorpusReport | null>(null)
+  const list = corpora?.corpora || []
+
+  async function run() {
+    if (!target) return toast.error('Pick a target')
+    try {
+      const r = await scan.mutateAsync({ target_id: target, corpus })
+      setResult(r)
+      toast[r.breached > 0 ? 'error' : 'success'](
+        r.breached > 0 ? `${r.breached}/${r.total} attacks landed` : `Held all ${r.total}`)
+    } catch (e) { toast.error(e instanceof Error ? e.message : 'Corpus scan failed') }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <h3 className="font-semibold">Seed-corpus benchmark</h3>
+        <p className="text-xs text-muted-foreground">
+          Replay a bundled known-attack dataset (jailbreaks / harm / extraction) for a reproducible
+          resistance score, broken down by named technique.
+        </p>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <div className="flex flex-wrap gap-2 items-end">
+          <div className="min-w-[180px]">
+            <label className="text-xs text-muted-foreground mb-1 block">Target</label>
+            <Select value={target} onValueChange={setTarget}>
+              <SelectTrigger><SelectValue placeholder="target…" /></SelectTrigger>
+              <SelectContent>{targets.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div className="min-w-[180px]">
+            <label className="text-xs text-muted-foreground mb-1 block">Corpus</label>
+            <Select value={corpus} onValueChange={setCorpus}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {(list.length ? list : [{ name: 'known_jailbreaks', entries: 0 }]).map(c =>
+                  <SelectItem key={c.name} value={c.name}>{c.name}{c.entries ? ` (${c.entries})` : ''}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button type="button" onClick={run} disabled={scan.isPending}>
+            {scan.isPending ? 'Replaying…' : 'Run benchmark'}
+          </Button>
+        </div>
+        {result && !result.error && (
+          <div className="grid gap-2">
+            <div className="flex items-center gap-2">
+              <Badge className={cn('text-[10px] uppercase',
+                result.breached === 0 ? 'bg-primary/15 text-primary' : 'bg-destructive/15 text-destructive')}>
+                resistance {result.resistance_pct}%
+              </Badge>
+              <span className="text-xs text-muted-foreground">{result.breached}/{result.total} breached · {result.corpus}</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+              {result.per_technique.map(t => (
+                <div key={t.technique} className="rounded border border-border px-2 py-1 text-xs flex items-center justify-between">
+                  <span className="truncate">{t.technique}</span>
+                  <span className={cn('tabular-nums', t.breached ? 'text-destructive' : 'text-primary')}>
+                    {t.breached}/{t.total}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// Red-team the DEFENSE: replay a corpus through the built-in guardrail and report block rate.
+function GuardrailCard() {
+  const rt = useGuardrailRedteam()
+  const { data: corpora } = useCorpora()
+  const [corpus, setCorpus] = useState('known_jailbreaks')
+  const [result, setResult] = useState<import('@/hooks/useApi').GuardrailReport | null>(null)
+  const list = corpora?.corpora || []
+
+  async function run() {
+    try {
+      const r = await rt.mutateAsync(corpus)
+      setResult(r)
+      toast.success(`Guard blocked ${r.blocked}/${r.total} (${r.block_rate_pct}%)`)
+    } catch (e) { toast.error(e instanceof Error ? e.message : 'Guard red-team failed') }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h3 className="font-semibold">Guardrail block-rate</h3>
+          <Select value={corpus} onValueChange={setCorpus}>
+            <SelectTrigger className="h-8 w-[180px] ml-auto text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {(list.length ? list : [{ name: 'known_jailbreaks', entries: 0 }]).map(c =>
+                <SelectItem key={c.name} value={c.name}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button type="button" size="sm" variant="outline"
+                  onClick={run} disabled={rt.isPending}>
+            {rt.isPending ? 'Testing…' : 'Red-team the guard'}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Replay the attack corpus through the deployable input guard and measure how much it blocks
+          — the defensive side of find→fix. Runs offline.
+        </p>
+      </CardHeader>
+      {result && !result.error && (
+        <CardContent className="grid gap-2">
+          <div className="flex items-center gap-2">
+            <Badge className={cn('text-[10px] uppercase',
+              result.block_rate_pct >= 50 ? 'bg-primary/15 text-primary' : 'bg-secondary/15 text-secondary')}>
+              block rate {result.block_rate_pct}%
+            </Badge>
+            <span className="text-xs text-muted-foreground">{result.blocked}/{result.total} blocked · {result.corpus}</span>
+          </div>
+          <div className="grid gap-1 max-h-56 overflow-y-auto">
+            {result.results.map(r => (
+              <div key={r.id} className="flex items-center gap-2 text-xs">
+                <span className={r.blocked ? 'text-primary' : 'text-destructive'}>{r.blocked ? '✓' : '·'}</span>
+                <span className="truncate flex-1">{r.technique}</span>
+                <span className="text-muted-foreground text-[10px]">{r.blocked ? r.by.join(',') : 'missed'}</span>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      )}
+    </Card>
+  )
+}
+
+// Static scan of (LLM-generated) code: secrets, exec, deserialization, SQLi, crypto, pkg-hallucination.
+function CodeScanCard() {
+  const scan = useCodeScan()
+  const [code, setCode] = useState('')
+  const [result, setResult] = useState<import('@/hooks/useApi').CodeScanReport | null>(null)
+
+  async function run() {
+    if (!code.trim()) return toast.error('Paste some code to scan')
+    try {
+      const r = await scan.mutateAsync({ code })
+      setResult(r)
+      toast[r.count > 0 ? 'error' : 'success'](r.count > 0 ? `${r.count} issue(s) found` : 'No issues')
+    } catch (e) { toast.error(e instanceof Error ? e.message : 'Code scan failed') }
+  }
+
+  const sev = (s: string) => s === 'critical' || s === 'high' ? 'bg-destructive/15 text-destructive'
+    : s === 'medium' ? 'bg-secondary/15 text-secondary' : 'bg-muted text-muted-foreground'
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <h3 className="font-semibold">Code scan (LLM-generated)</h3>
+        <p className="text-xs text-muted-foreground">
+          Statically scan agent-written code for hardcoded secrets, dynamic exec, unsafe deserialization,
+          SQL injection, weak crypto, and unverified imports (package hallucination).
+        </p>
+      </CardHeader>
+      <CardContent className="grid gap-2">
+        <textarea
+          className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-xs font-mono ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring min-h-[100px] resize-y"
+          placeholder="paste code the model produced…"
+          value={code} onChange={e => setCode(e.target.value)} />
+        <div>
+          <Button type="button" onClick={run} disabled={scan.isPending}>
+            {scan.isPending ? 'Scanning…' : 'Scan code'}
+          </Button>
+        </div>
+        {result && !result.error && (
+          result.count === 0
+            ? <p className="text-xs text-primary">No issues found. ✅</p>
+            : <div className="grid gap-1">
+                {result.findings.map((f, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <Badge className={cn('text-[9px] uppercase', sev(f.severity))}>{f.severity}</Badge>
+                    <code className="text-muted-foreground">{f.rule_id}</code>
+                    <span className="text-muted-foreground">L{f.line}</span>
+                    <span className="truncate flex-1">{f.title}</span>
+                  </div>
+                ))}
+              </div>
+        )}
+      </CardContent>
     </Card>
   )
 }

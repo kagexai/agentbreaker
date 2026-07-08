@@ -329,6 +329,55 @@ export function useFrameworks() {
   })
 }
 
+// ── Seed-corpus benchmark ─────────────────────────────────────────────────────
+export interface CorpusInfo { name: string; entries: number }
+export interface CorpusReport {
+  corpus: string; target?: string; total: number; breached: number; resistance_pct: number
+  per_technique: { technique: string; total: number; breached: number }[]
+  results?: { id: string; technique: string; breached: boolean; reason: string }[]
+  error?: string
+}
+export function useCorpora() {
+  return useQuery({
+    queryKey: ['corpora'],
+    queryFn: () => getJson<{ corpora: CorpusInfo[] }>('/api/corpus'),
+    staleTime: 60_000,
+  })
+}
+export function useCorpusScan() {
+  return useMutation({
+    mutationFn: (payload: { target_id: string; corpus: string }) =>
+      postJson<CorpusReport>('/api/corpus/scan', payload),
+  })
+}
+
+// ── Guardrail block-rate (red-team-the-guard) ─────────────────────────────────
+export interface GuardrailReport {
+  corpus: string; total: number; blocked: number; block_rate_pct: number
+  results: { id: string; technique: string; blocked: boolean; by: string[] }[]
+  error?: string
+}
+export function useGuardrailRedteam() {
+  return useMutation({
+    mutationFn: (corpus: string) =>
+      getJson<GuardrailReport>(`/api/guardrails/redteam?corpus=${encodeURIComponent(corpus)}`),
+  })
+}
+
+// ── Static code scan ──────────────────────────────────────────────────────────
+export interface CodeScanReport {
+  language: string; count: number
+  by_severity: Record<string, number>
+  findings: { rule_id: string; severity: string; line: number; title: string; detail: string }[]
+  error?: string
+}
+export function useCodeScan() {
+  return useMutation({
+    mutationFn: (payload: { code: string; language?: string }) =>
+      postJson<CodeScanReport>('/api/code/scan', payload),
+  })
+}
+
 export function useReportCard(targetId: string) {
   return useQuery({
     queryKey: ['report-card', targetId],
