@@ -125,15 +125,16 @@ _CATEGORY_THEME = {
     "misinformation": "misinfo", "hallucination": "hallucination", "deception": "deception",
     "intellectual_property": "ip", "competitor_endorsement": "ip",
     "input_overreliance": "overreliance", "goal_theft": "agentic",
+    "child_safety": "child", "ethical_integrity": "ethics", "fairness_treatment": "fairness",
 }
 # Order themes so breadth fill front-loads the classes the planner will NOT pick on its own.
 # The planner (LLM or surface-derived) already proposes extraction/data/pii/injection/tool
 # objectives for an app, and jailbreak/harmful for a bare model — so those are usually
 # covered. The judgment families (bias/toxicity/misinformation/hallucination/deception/IP/
 # overreliance) are the ones that never got tested, so the scarce breadth slots go there first.
-_THEME_ORDER = ["bias", "toxicity", "misinfo", "hallucination", "deception", "ip",
-                "overreliance", "harmful", "jailbreak", "pii", "injection", "extraction",
-                "data", "agentic", "other"]
+_THEME_ORDER = ["bias", "fairness", "toxicity", "child", "ethics", "misinfo", "hallucination",
+                "deception", "ip", "overreliance", "harmful", "jailbreak", "pii", "injection",
+                "extraction", "data", "agentic", "other"]
 
 
 def _catalog_objectives(capabilities: dict[str, bool]) -> list[AttackObjective]:

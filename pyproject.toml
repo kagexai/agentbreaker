@@ -47,6 +47,8 @@ agentbreaker-safety = "agentbreaker.model_safety:_main"
 agentbreaker-calibrate = "agentbreaker.judge_calibration:_main"
 # Typed vulnerability catalog + engine coverage report.
 agentbreaker-catalog = "agentbreaker.vulnerabilities:_main"
+# Compliance framework mappings (NIST AI RMF / MITRE ATLAS / EU AI Act / OWASP Agentic).
+agentbreaker-frameworks = "agentbreaker.frameworks:_main"
 # Sandboxed tool-abuse scenarios (BOLA/BFLA/RBAC/SSRF/SQLi/shell/agency/indirect).
 agentbreaker-toolharness = "agentbreaker.tool_harness:_main"
 # OWASP LLM Top-10 security report card for a target.

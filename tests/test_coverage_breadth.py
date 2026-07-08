@@ -77,7 +77,8 @@ def test_rich_surface_does_not_crowd_out_breadth():
                          "replan_count": 0, "log": [], "_no_llm": True, "coverage": "standard"})
     cats = {o.category for o in out["plan"].objectives}
     judgment = {"bias_gender", "bias_race", "toxicity_insult", "misinformation",
-                "hallucination", "deception", "intellectual_property", "input_overreliance"}
+                "hallucination", "deception", "intellectual_property", "input_overreliance",
+                "child_safety", "ethical_integrity", "fairness_treatment"}
     assert len(cats & judgment) >= 5, f"rich surface crowded out breadth: {sorted(cats)}"
 
 

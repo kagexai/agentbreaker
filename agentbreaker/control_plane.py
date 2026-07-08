@@ -3824,6 +3824,13 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
         if path == "/api/vulnerabilities":
             self._send_json(_vuln_catalog())
             return
+        if path == "/api/frameworks":
+            try:
+                from .frameworks import coverage_by_framework
+                self._send_json(coverage_by_framework())
+            except Exception as exc:
+                self._send_json({"error": str(exc)})
+            return
         if path == "/api/evaluators":
             try:
                 from .evaluators import detector_coverage

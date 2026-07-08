@@ -57,6 +57,7 @@ class ReportCard:
     tool_abuse: dict[str, Any] = field(default_factory=dict)
     harm: dict[str, Any] = field(default_factory=dict)
     safety: dict[str, Any] = field(default_factory=dict)
+    frameworks: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -65,7 +66,7 @@ class ReportCard:
             "owasp": [r.__dict__ for r in self.owasp],
             "findings": self.findings, "detector": self.detector,
             "coverage": self.coverage, "tool_abuse": self.tool_abuse,
-            "harm": self.harm, "safety": self.safety,
+            "harm": self.harm, "safety": self.safety, "frameworks": self.frameworks,
         }
 
     def to_markdown(self) -> str:
@@ -87,6 +88,12 @@ class ReportCard:
         for r in self.owasp:
             lines.append(f"| {r.owasp} | {r.title} | {r.grade} | "
                          f"{r.vulns_covered}/{r.vulns_total} | {r.breaches} |")
+        if self.frameworks:
+            lines += ["", "## Framework compliance", "| Framework | Status | Breaches |",
+                      "|---|---|---|"]
+            for fw in self.frameworks.values():
+                mark = "❌ FAIL" if fw.get("status") == "fail" else "✅ pass"
+                lines.append(f"| {fw.get('name')} | {mark} | {fw.get('total_breaches', 0)} |")
         if self.findings:
             lines += ["", "## Confirmed findings"]
             for f in self.findings:
@@ -129,18 +136,34 @@ def build_report_card(target_id: str, *, generated_at: str,
         if owasp and n:
             owasp_breaches[owasp] = owasp_breaches.get(owasp, 0) + n
 
+    # Track the breached catalog vulnerability ids too, for the framework compliance view.
+    breached_ids: set[str] = set()
+    # Map harm-taxonomy categories onto the catalog classes they represent, so a harm
+    # compliance shows up under the right framework categories.
+    _HARM_TO_VULN = {"self_harm": "personal_safety", "privacy_doxxing": "pii_direct",
+                     "dangerous_misinfo": "misinformation", "hate_harassment": "toxicity_insult"}
+
     # Staged/belief findings + tool-abuse: category -> OWASP via the catalog.
     for f in findings:
         if f.get("breached"):
-            v = _vulns.get(str(f.get("category", "")))
+            cat = str(f.get("category", ""))
+            v = _vulns.get(cat)
             _bump(v.owasp if v else "LLM01")
+            if v:
+                breached_ids.add(v.id)
     for r in (tool_abuse or {}).get("results", []):
         if r.get("breached"):
-            v = _vulns.get(str(r.get("category", "")))
+            cat = str(r.get("category", ""))
+            v = _vulns.get(cat)
             _bump(v.owasp if v else "LLM06")
+            if v:
+                breached_ids.add(v.id)
     # Harm taxonomy: each category carries its own OWASP + compliance count.
     for c in (harm or {}).get("categories", []):
-        _bump(str(c.get("owasp", "LLM05")), int(c.get("complied", 0) or 0))
+        n = int(c.get("complied", 0) or 0)
+        _bump(str(c.get("owasp", "LLM05")), n)
+        if n:
+            breached_ids.add(_HARM_TO_VULN.get(str(c.get("category", "")), "harmful_content"))
 
     # Group the catalog by OWASP id, roll up coverage, attach breaches.
     covered_ids = _covered_ids(coverage)
@@ -177,7 +200,17 @@ def build_report_card(target_id: str, *, generated_at: str,
                              for c in (harm or {}).get("categories", []) if c.get("complied")]}
               if harm else {},
         safety=safety or {},
+        frameworks=_framework_view(breached_ids),
     )
+
+
+def _framework_view(breached_ids: set[str]) -> dict[str, Any]:
+    """Fold breached vulnerability ids into the NIST/MITRE/EU-AI-Act/OWASP-Agentic view."""
+    try:
+        from .frameworks import framework_view
+        return framework_view(breached_ids)
+    except Exception:
+        return {}
 
 
 def _covered_ids(coverage: dict[str, Any]) -> set[str]:

@@ -189,6 +189,7 @@ NEEDS_JUDGE = {
     "bias_gender", "bias_race", "bias_political", "misinformation", "hallucination",
     "deception", "intellectual_property", "competitor_endorsement", "input_overreliance",
     "guardrail_disclosure", "goal_theft",
+    "child_safety", "ethical_integrity", "fairness_treatment",
 }
 
 
