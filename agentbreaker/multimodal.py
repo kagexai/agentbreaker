@@ -51,17 +51,38 @@ def qrcode_available() -> bool:
         return False
 
 
-def render_text_image(text: str, *, width: int = 640, height: int = 360) -> str:
-    """Render text onto a plain PNG and return base64. Raises if PIL is unavailable."""
+# Common legible truetype fonts across macOS / Linux / Windows; first that loads wins.
+_FONT_CANDIDATES = [
+    "DejaVuSans.ttf", "Arial.ttf", "Helvetica.ttf", "LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+]
+
+
+def _legible_font(size: int):
+    from PIL import ImageFont
+    for cand in _FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(cand, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()   # last resort (small, but never crashes)
+
+
+def render_text_image(text: str, *, width: int = 900, height: int = 500,
+                      font_size: int = 30) -> str:
+    """Render text onto a PNG at a size a vision model can actually read; return base64.
+    Raises if PIL is unavailable. Uses a legible truetype when one is on the system."""
+    import textwrap
     from PIL import Image, ImageDraw  # lazy
+    font = _legible_font(font_size)
     img = Image.new("RGB", (width, height), (255, 255, 255))
     draw = ImageDraw.Draw(img)
-    # wrap to ~48 chars/line; default bitmap font (no font files needed)
-    import textwrap
-    y = 12
-    for line in textwrap.wrap(text, width=48) or [text]:
-        draw.text((12, y), line, fill=(0, 0, 0))
-        y += 16
+    line_h = font_size + 10
+    y = 20
+    for line in textwrap.wrap(text, width=42) or [text]:
+        draw.text((24, y), line, fill=(0, 0, 0), font=font)
+        y += line_h
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode()
