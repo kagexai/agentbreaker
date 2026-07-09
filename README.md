@@ -23,11 +23,18 @@ What matters is what AgentBreaker has already been able to surface across real s
 AgentBreaker is built to help teams uncover issues such as:
 
 - system prompt leakage and hidden instruction disclosure
-- jailbreak and policy bypass paths
-- unsafe tool behavior and action chaining
+- jailbreak and policy bypass paths (incl. named attacks: skeleton-key, many-shot, homoglyph/
+  zero-width smuggling, flip, policy-puppetry)
+- unsafe tool behavior and action chaining (sandboxed BOLA/BFLA/RBAC/SSRF/SQLi oracles)
 - sensitive data exposure and retrieval abuse
-- browser and API workflow weaknesses around agent execution
+- image-borne injection against vision models (text-in-image / QR)
 - weak refusal patterns that collapse under pressure
+- responsible-AI classes (bias, toxicity, misinformation, child-safety, fairness) mapped to
+  OWASP / NIST AI RMF / MITRE ATLAS / EU AI Act
+
+It also ships the defensive side (deployable input/output **guardrails** you can red-team for
+block rate), reproducible **attack corpora**, a **CI gate** for pinning red-team expectations,
+and a static **code scanner** for LLM-generated code.
 
 ## Public Showcase
 
@@ -104,14 +111,24 @@ agentbreaker serve --port 1337
 
 ## Core Files
 
-- `agentbreaker/cli.py` - main CLI entrypoint
-- `agentbreaker/campaign.py` - campaign loop and strategy selection
-- `agentbreaker/attack.py` - payload construction
-- `agentbreaker/target.py` - execution harness and scoring
-- `agentbreaker/control_plane.py` - operator backend
+- `agentbreaker/control_plane.py` - operator backend + CLI entrypoint (`agentbreaker`)
+- `agentbreaker/campaign.py` - campaign runner (belief + staged engines)
+- `agentbreaker/campaign_engine.py` - in-process belief engine (adaptive loop)
+- `agentbreaker/agents/` - staged recon→analyse→attack→report pipeline
+- `agentbreaker/target.py` - execution harness, providers, scoring
+- `agentbreaker/vulnerabilities.py` / `frameworks.py` - 44-class catalog + NIST/MITRE/EU-AI-Act/OWASP mapping
+- `agentbreaker/corpus.py` / `data/corpora/` - replayable attack datasets + benchmark
+- `agentbreaker/guardrails.py` - deployable input/output guards + red-team-the-guard
+- `agentbreaker/suite.py` - declarative YAML suite + pytest asserts + CI gate
+- `agentbreaker/{integrations,connectors,tracing,multimodal,code_scanner}.py` - BYO-target, connectors, tracing, image attacks, code scan
 - `frontend/` - control plane frontend
-- `taxonomy/agentbreaker_taxonomy.yaml` - strategy library
 - `target_config.yaml` - system and model configuration
+
+## CLIs
+
+`agentbreaker` (server) · `-corpus` (dataset benchmark) · `-guard` (red-team a guardrail) ·
+`-gate` (CI suite) · `-codescan` · `-harm` · `-toolharness` · `-safety` · `-catalog` ·
+`-frameworks` · `-reportcard` · `-calibrate` · `-judge` · `-eval` · `-mcp`.
 
 ## Safety
 

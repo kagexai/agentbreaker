@@ -79,16 +79,32 @@ embedded_instruction_json (minor variants).
    (never-executed) call args, not an LLM judge → cheaper, reproducible, no false-positive drift.
 3. **One OWASP report card** bundling attacks + tool-abuse + harm + detector reliability into a
    shareable graded artifact (single "Run full assessment").
-4. **Fully offline-testable** (176+ tests, scripted deciders/judges) — deepteam needs live LLM calls.
+4. **Fully offline-testable** (262 tests, scripted deciders/judges) — deepteam needs live LLM calls.
 5. **Live-run discipline** surfaced real detector bugs (base64 matching, typographic apostrophes)
    that ASCII unit tests missed.
+6. **Adaptive belief engine** (warm-vectors + persisted belief state) — most competitors' attacks
+   are static libraries; only garak's `atkgen` and PyRIT's multi-turn are adaptive.
 
-## Where deepteam is ahead (gaps we're closing)
+## Parity layer — gaps closed vs garak / PyRIT / deepteam / deepeval / promptfoo / cisco
 
-1. **Breadth of agentic vulns** (11 typed) + **trace scanning** over agent execution traces.
-2. **Framework bundles** (NIST/MITRE/EU-AI-Act/OWASP-Agentic) that auto-curate vulns+attacks.
-3. **child_protection / ethics / fairness** responsible-AI vulns.
-4. A couple minor attack variants (character_stream, sequential_break).
+A grounded source-level survey of all six tools drove 8 modules (each tested + CLI/endpoint) that
+close the remaining gaps while keeping AgentBreaker an *offensive engine* (not a quality-eval lib):
+
+| Gap (whose strength) | Closed by |
+|---|---|
+| Reproducible attack datasets (garak/PyRIT/deepeval) | `corpus.py` + `data/corpora/*.jsonl` — replay known jailbreaks/harm/extraction as a resistance benchmark; `synthesize_from_profile` = offline docs→goldens |
+| Named published attacks (garak ~45 / PyRIT 86) | `attack_methods`: homoglyph, zero-width, skeleton-key, flip, many-shot, policy-puppetry (GCG/glitch deferred — white-box) |
+| Deployable defense (deepteam guards / cisco) | `guardrails.py` input/output guards + `red_team_guards()` block-rate harness (hardened decode/normalize → 83% on the corpus) |
+| CI / pytest / declarative suite (promptfoo/deepeval) | `suite.py`: YAML suite + `assert_resists`/`assert_guard_blocks` + `agentbreaker-gate` CI gate |
+| BYO-target + tracing (deepteam/deepeval) | `integrations.py` `as_callback`/`red_team()`; `tracing.py` `@observe`/OTLP mirror |
+| Multimodal attacks (PyRIT) | `multimodal.py` text-in-image + QR → wired live into AgentExecutor **Phase M** for vision targets |
+| Static code + trace scan (deepteam/cisco/garak) | `code_scanner.py`: secrets/exec/deser/SQLi/crypto/pkg-hallucination + trace scan |
+| Connector breadth (PyRIT targets) | `connectors.py`: HTTP endpoint / OpenAI-compatible / browser (Playwright, graceful) |
+
+Earlier parity work (already shipped): typed vuln catalog **44/44**, framework bundles
+(NIST/MITRE/EU-AI-Act/OWASP-Agentic), child_protection/ethics/fairness, sandboxed tool-abuse,
+breadth-guaranteed planning. **Deliberately NOT built:** deepeval's RAG/quality-eval metric suite
+(faithfulness, task-completion, …) — that's a separate product, not red-team.
 
 ## Live spin — deepteam vs the same gpt-5.4 "Myra" target
 
@@ -121,5 +137,7 @@ guard_exposure / permissions_and_roles) is a nice refinement over our single
 surfaced strictly more (18 breaches across more OWASP categories) with calibrated detectors,
 where deepteam ran 5 uncalibrated-judge tests.
 
-_Doc updated as gaps close — see git log `docs: comparison`, `feat: close attack-method gaps`,
-`feat: close the agentic-vuln gap`._
+_Doc updated as gaps close. The 8-module parity layer (corpus, named attacks, guardrails, CI
+suite, BYO-target+tracing, multimodal, code-scan, connectors) landed after a source-level survey
+of garak/PyRIT/deepteam/deepeval/cisco in `inspiration/` — see git log `feat: seed-corpus…`
+through `feat: harden the injection guard…` and the `competitive-parity-layer` memory._
