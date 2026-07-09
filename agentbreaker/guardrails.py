@@ -64,15 +64,56 @@ _INJECTION_PATTERNS = [
     r"content[_ ]policy\s*(=|:)?\s*(disabled|off|false)",
     r"pretend (you|to)[^.]*no (rules|restrictions|policy)",
     r"reveal (your|the) (system prompt|hidden instructions|rules)",
+    # broadened framings (opposite-day / persona / relay / echo-bait / override)
+    r"opposite day", r"stay (fully )?in character", r"no (rules|restrictions|content policy|filter)",
+    r"unrestricted (developer|mode|ai|assistant)", r"prior instructions are (void|suspended|null)",
+    r"(reply|respond|output|say) (with )?exactly", r"confirm (activation|by )",
+    r"translate .* (working language|to your language|then back)",
+    r"reverse it back", r"in a (fictional|hypothetical) world where you have no",
+    r"<system_config>|<content_policy>|authorized\s*[:=]\s*true",
 ]
 _INJECTION_RE = re.compile("|".join(_INJECTION_PATTERNS), re.IGNORECASE)
 
+# Unicode confusables an attacker uses to smuggle keywords past a plaintext filter.
+_DEHOMOGLYPH = str.maketrans({
+    "а": "a", "с": "c", "е": "e", "о": "o", "р": "p", "х": "x", "у": "y",
+    "А": "A", "В": "B", "С": "C", "Е": "E", "Н": "H", "О": "O", "Р": "P", "Т": "T",
+})
+_ZERO_WIDTH = dict.fromkeys(map(ord, "​‌‍⁠﻿"), None)
+
+
+def _normalize(text: str) -> str:
+    """Undo the evasions the named-attack library uses: strip zero-width chars and map
+    Unicode confusables back to ASCII so keyword matching can't be smuggled past."""
+    return (text or "").translate(_ZERO_WIDTH).translate(_DEHOMOGLYPH)
+
+
+def _decoded_variants(text: str) -> list[str]:
+    """The text plus decoded views (base64 / rot13) so encoding-wrapped injections are seen."""
+    import base64
+    import codecs
+    out = [text]
+    try:
+        out.append(codecs.decode(text, "rot13"))
+    except Exception:
+        pass
+    for token in re.findall(r"[A-Za-z0-9+/]{16,}={0,2}", text or ""):
+        try:
+            dec = base64.b64decode(token + "=" * (-len(token) % 4), validate=False)
+            s = dec.decode("utf-8", "ignore")
+            if s.isprintable():
+                out.append(s)
+        except Exception:
+            pass
+    return out
+
 
 def prompt_injection_guard(text: str) -> GuardVerdict:
-    m = _INJECTION_RE.search(text or "")
-    if m:
-        return GuardVerdict("prompt_injection", "unsafe", 1.0,
-                            f"matched injection pattern: {m.group(0)[:60]!r}")
+    for variant in _decoded_variants(_normalize(text)):
+        m = _INJECTION_RE.search(variant)
+        if m:
+            return GuardVerdict("prompt_injection", "unsafe", 1.0,
+                                f"matched injection pattern: {m.group(0)[:60]!r}")
     return GuardVerdict("prompt_injection", "safe", 0.0, "no injection pattern")
 
 
