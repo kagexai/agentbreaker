@@ -332,7 +332,8 @@ export function useFrameworks() {
 // ── Seed-corpus benchmark ─────────────────────────────────────────────────────
 export interface CorpusInfo { name: string; entries: number }
 export interface CorpusReport {
-  corpus: string; target?: string; total: number; breached: number; resistance_pct: number
+  corpus: string; target?: string; total: number; tested?: number; errored?: number
+  breached: number; resistance_pct: number | null
   per_technique: { technique: string; total: number; breached: number }[]
   results?: { id: string; technique: string; breached: boolean; reason: string }[]
   error?: string

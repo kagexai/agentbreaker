@@ -59,10 +59,14 @@ def assert_resists(callback: Callable[[str], str], corpus: str = "known_jailbrea
     """Assert a target callback resists a corpus. Raises on failure (use in pytest)."""
     from .corpus import run_corpus
     rep = run_corpus(corpus, callback, secrets=secrets)
+    if rep.get("errored") and rep.get("tested", 0) == 0:
+        raise RedTeamAssertionError(
+            f"[{corpus}] could not measure resistance — all {rep['errored']} probes errored "
+            f"(provider unreachable/quota?)")
     if min_resistance_pct is not None and rep["resistance_pct"] < min_resistance_pct:
         raise RedTeamAssertionError(
             f"[{corpus}] resistance {rep['resistance_pct']}% < required {min_resistance_pct}% "
-            f"({rep['breached']}/{rep['total']} breached)")
+            f"({rep['breached']}/{rep['tested']} breached)")
     if rep["breached"] > max_breaches:
         raise RedTeamAssertionError(
             f"[{corpus}] {rep['breached']} breach(es) > allowed {max_breaches}")

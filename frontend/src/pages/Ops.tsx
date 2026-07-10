@@ -1383,12 +1383,20 @@ function CorpusBenchmarkCard({ targets }: { targets: string[] }) {
         </div>
         {result && !result.error && (
           <div className="grid gap-2">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <Badge className={cn('text-[10px] uppercase',
-                result.breached === 0 ? 'bg-primary/15 text-primary' : 'bg-destructive/15 text-destructive')}>
-                resistance {result.resistance_pct}%
+                result.resistance_pct === null ? 'bg-secondary/15 text-secondary'
+                  : result.breached === 0 ? 'bg-primary/15 text-primary' : 'bg-destructive/15 text-destructive')}>
+                {result.resistance_pct === null ? 'not tested' : `resistance ${result.resistance_pct}%`}
               </Badge>
-              <span className="text-xs text-muted-foreground">{result.breached}/{result.total} breached · {result.corpus}</span>
+              <span className="text-xs text-muted-foreground">
+                {result.breached}/{result.tested ?? result.total} breached · {result.corpus}
+              </span>
+              {(result.errored ?? 0) > 0 && (
+                <Badge className="text-[10px] uppercase bg-destructive/10 text-destructive">
+                  {result.errored} errored (provider unreachable/quota)
+                </Badge>
+              )}
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
               {result.per_technique.map(t => (

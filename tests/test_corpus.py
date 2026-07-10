@@ -29,8 +29,12 @@ def test_refuser_resists_everything():
 def test_errored_and_empty_not_counted():
     def _boom(p: str) -> str:
         raise RuntimeError("rate limited")
-    assert C.run_corpus("harm_seeds", _boom)["breached"] == 0
-    assert C.run_corpus("harm_seeds", lambda p: "")["breached"] == 0
+    # all probes error -> 0 breaches, and resistance is None (not a misleading 100%)
+    rep = C.run_corpus("harm_seeds", _boom)
+    assert rep["breached"] == 0
+    assert rep["errored"] == rep["total"] and rep["tested"] == 0
+    assert rep["resistance_pct"] is None
+    assert C.run_corpus("harm_seeds", lambda p: "")["errored"] > 0
 
 
 def test_per_technique_rollup():

@@ -40,11 +40,12 @@ class CorpusResult:
     response: str
     breached: bool
     reason: str
+    errored: bool = False   # provider error / empty — the attack was NOT actually tested
 
     def to_dict(self) -> dict[str, Any]:
         return {"id": self.entry.id, "technique": self.entry.technique,
                 "category": self.entry.category, "breached": self.breached,
-                "reason": self.reason, "response": self.response[:300]}
+                "errored": self.errored, "reason": self.reason, "response": self.response[:300]}
 
 
 def available_corpora() -> list[str]:
@@ -98,9 +99,9 @@ def run_corpus(name: str, callback: Callable[[str], str], *,
         try:
             resp = callback(entry.prompt) or ""
         except Exception as exc:
-            return CorpusResult(entry, "", False, f"errored, not counted: {exc}")
+            return CorpusResult(entry, "", False, f"errored, not counted: {exc}", errored=True)
         if not resp.strip():
-            return CorpusResult(entry, "", False, "empty response, not counted")
+            return CorpusResult(entry, "", False, "empty response, not counted", errored=True)
         v = _score(entry, resp, secrets, judge)
         return CorpusResult(entry, resp, v.breached, v.reason)
 
@@ -116,11 +117,18 @@ def run_corpus(name: str, callback: Callable[[str], str], *,
 
     total = len(results)
     breached = sum(1 for r in results if r.breached)
+    errored = sum(1 for r in results if r.errored)
+    tested = total - errored   # attacks that actually reached the model
+    # Resistance is over what was ACTUALLY tested — so an all-errored (e.g. quota) run reports
+    # None, not a misleading 100%.
+    resistance = round(100 * (tested - breached) / tested) if tested else None
     return {
         "corpus": name,
         "total": total,
+        "tested": tested,
+        "errored": errored,
         "breached": breached,
-        "resistance_pct": round(100 * (total - breached) / total) if total else 100,
+        "resistance_pct": resistance,
         "per_technique": [{"technique": k, **v} for k, v in sorted(per_technique.items())],
         "results": [r.to_dict() for r in results],
     }
@@ -186,8 +194,11 @@ def _main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(report, indent=2))
     else:
-        print(f"Corpus {report['corpus']} · {report['target'] if 'target' in report else args.target}: "
-              f"{report['breached']}/{report['total']} breached · resistance {report['resistance_pct']}%\n")
+        res = report["resistance_pct"]
+        res_str = f"{res}%" if res is not None else "n/a (all errored)"
+        err = f" · {report['errored']} errored" if report.get("errored") else ""
+        print(f"Corpus {report['corpus']} · {args.target}: {report['breached']}/{report['tested']} "
+              f"breached · resistance {res_str}{err}\n")
         for t in report["per_technique"]:
             mark = "⚠" if t["breached"] else "held"
             print(f"  {t['technique']:22s} {t['breached']}/{t['total']}  {mark}")
