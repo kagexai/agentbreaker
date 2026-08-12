@@ -55,6 +55,8 @@ flowchart LR
 
 ## Quick Start
 
+Requires Python >=3.11 and Node.js.
+
 ```bash
 git clone https://github.com/kagexai/agentbreaker.git
 cd agentbreaker
@@ -62,6 +64,9 @@ cd agentbreaker
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
+pip install -r requirements.txt
+
+cd frontend && npm install && npm run build && cd ..
 
 cp .env.example .env
 agentbreaker validate --check-env
@@ -101,6 +106,8 @@ Start the review surface:
 ```bash
 agentbreaker serve --port 1337
 ```
+
+Scans can also be launched from the control plane UI, under the Operations tab.
 
 ## Core Files
 
