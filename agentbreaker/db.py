@@ -20,7 +20,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 # ---------------------------------------------------------------------------
@@ -41,76 +41,89 @@ def open_db(db_path: Path) -> sqlite3.Connection:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     user_version = conn.execute("PRAGMA user_version").fetchone()[0]
-    if user_version >= SCHEMA_VERSION:
-        return
+    if user_version < 1:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS attacks (
+                attack_id         TEXT PRIMARY KEY,
+                target_id         TEXT NOT NULL,
+                campaign_tag      TEXT NOT NULL DEFAULT '',
+                category          TEXT,
+                technique         TEXT,
+                owasp_ref         TEXT,
+                benchmark_ref     TEXT,
+                description       TEXT,
+                status            TEXT,
+                commit_ref        TEXT,
+                vulnerability     REAL,
+                novelty           REAL,
+                reliability       REAL,
+                composite         REAL,
+                asr               REAL,
+                breach_detected   INTEGER DEFAULT 0,
+                partial_leak      INTEGER DEFAULT 0,
+                response_gradient REAL    DEFAULT 0.0,
+                failure_mode      TEXT,
+                response_cluster  TEXT,
+                recommended_next  TEXT,
+                combo_with        TEXT,
+                combo_reason      TEXT,
+                judge_reasoning   TEXT,
+                finding_tier      TEXT,
+                finding_path      TEXT,
+                created_at        TEXT NOT NULL
+            );
 
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS attacks (
-            attack_id         TEXT PRIMARY KEY,
-            target_id         TEXT NOT NULL,
-            campaign_tag      TEXT NOT NULL DEFAULT '',
-            category          TEXT,
-            technique         TEXT,
-            owasp_ref         TEXT,
-            benchmark_ref     TEXT,
-            description       TEXT,
-            status            TEXT,
-            commit_ref        TEXT,
-            vulnerability     REAL,
-            novelty           REAL,
-            reliability       REAL,
-            composite         REAL,
-            asr               REAL,
-            breach_detected   INTEGER DEFAULT 0,
-            partial_leak      INTEGER DEFAULT 0,
-            response_gradient REAL    DEFAULT 0.0,
-            failure_mode      TEXT,
-            response_cluster  TEXT,
-            recommended_next  TEXT,
-            combo_with        TEXT,
-            combo_reason      TEXT,
-            judge_reasoning   TEXT,
-            finding_tier      TEXT,
-            finding_path      TEXT,
-            created_at        TEXT NOT NULL
-        );
+            CREATE INDEX IF NOT EXISTS idx_attacks_target
+                ON attacks(target_id, campaign_tag);
 
-        CREATE INDEX IF NOT EXISTS idx_attacks_target
-            ON attacks(target_id, campaign_tag);
+            CREATE TABLE IF NOT EXISTS trials (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                attack_id        TEXT    NOT NULL,
+                target_id        TEXT    NOT NULL,
+                trial_num        INTEGER,
+                ts               TEXT,
+                modality         TEXT,
+                payload_text     TEXT,
+                payload_messages TEXT,
+                response_text    TEXT,
+                breach_hint      INTEGER DEFAULT 0,
+                error            TEXT,
+                scores           TEXT,
+                metadata         TEXT,
+                FOREIGN KEY (attack_id) REFERENCES attacks(attack_id)
+            );
 
-        CREATE TABLE IF NOT EXISTS trials (
-            id               INTEGER PRIMARY KEY AUTOINCREMENT,
-            attack_id        TEXT    NOT NULL,
-            target_id        TEXT    NOT NULL,
-            trial_num        INTEGER,
-            ts               TEXT,
-            modality         TEXT,
-            payload_text     TEXT,
-            payload_messages TEXT,
-            response_text    TEXT,
-            breach_hint      INTEGER DEFAULT 0,
-            error            TEXT,
-            scores           TEXT,
-            metadata         TEXT,
-            FOREIGN KEY (attack_id) REFERENCES attacks(attack_id)
-        );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_trials_unique
+                ON trials(attack_id, trial_num);
+            CREATE INDEX IF NOT EXISTS idx_trials_attack
+                ON trials(attack_id);
 
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_trials_unique
-            ON trials(attack_id, trial_num);
-        CREATE INDEX IF NOT EXISTS idx_trials_attack
-            ON trials(attack_id);
+            CREATE TABLE IF NOT EXISTS planner_decisions (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts        TEXT,
+                target_id TEXT,
+                attack_id TEXT,
+                plan      TEXT
+            );
 
-        CREATE TABLE IF NOT EXISTS planner_decisions (
-            id        INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts        TEXT,
-            target_id TEXT,
-            attack_id TEXT,
-            plan      TEXT
-        );
+            CREATE INDEX IF NOT EXISTS idx_planner_attack
+                ON planner_decisions(attack_id);
+        """)
+        user_version = 1
 
-        CREATE INDEX IF NOT EXISTS idx_planner_attack
-            ON planner_decisions(attack_id);
-    """)
+    if user_version < 2:
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(attacks)").fetchall()
+        }
+        if "secret_present" not in columns:
+            conn.execute(
+                "ALTER TABLE attacks ADD COLUMN secret_present INTEGER DEFAULT 0"
+            )
+        if "experiment_path" not in columns:
+            conn.execute("ALTER TABLE attacks ADD COLUMN experiment_path TEXT")
+        user_version = 2
+
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 
@@ -135,18 +148,18 @@ def upsert_attack(
             attack_id, target_id, campaign_tag, category, technique,
             owasp_ref, benchmark_ref, description, status, commit_ref,
             vulnerability, novelty, reliability, composite, asr,
-            breach_detected, partial_leak, response_gradient,
+            breach_detected, secret_present, partial_leak, response_gradient,
             failure_mode, response_cluster, recommended_next,
             combo_with, combo_reason, judge_reasoning,
-            finding_tier, finding_path, created_at
+            finding_tier, finding_path, experiment_path, created_at
         ) VALUES (
             :attack_id, :target_id, :campaign_tag, :category, :technique,
             :owasp_ref, :benchmark_ref, :description, :status, :commit_ref,
             :vulnerability, :novelty, :reliability, :composite, :asr,
-            :breach_detected, :partial_leak, :response_gradient,
+            :breach_detected, :secret_present, :partial_leak, :response_gradient,
             :failure_mode, :response_cluster, :recommended_next,
             :combo_with, :combo_reason, :judge_reasoning,
-            :finding_tier, :finding_path, :created_at
+            :finding_tier, :finding_path, :experiment_path, :created_at
         )
         ON CONFLICT(attack_id) DO UPDATE SET
             status            = excluded.status,
@@ -157,6 +170,7 @@ def upsert_attack(
             composite         = excluded.composite,
             asr               = excluded.asr,
             breach_detected   = excluded.breach_detected,
+            secret_present    = excluded.secret_present,
             partial_leak      = excluded.partial_leak,
             response_gradient = excluded.response_gradient,
             failure_mode      = excluded.failure_mode,
@@ -166,7 +180,8 @@ def upsert_attack(
             combo_reason      = excluded.combo_reason,
             judge_reasoning   = excluded.judge_reasoning,
             finding_tier      = COALESCE(excluded.finding_tier, finding_tier),
-            finding_path      = COALESCE(excluded.finding_path, finding_path)
+            finding_path      = COALESCE(excluded.finding_path, finding_path),
+            experiment_path   = COALESCE(excluded.experiment_path, experiment_path)
         """,
         {
             "attack_id":        result["attack_id"],
@@ -185,6 +200,7 @@ def upsert_attack(
             "composite":        float(result.get("composite", 0.0)),
             "asr":              float(result.get("asr", 0.0)),
             "breach_detected":  int(bool(result.get("breach_detected"))),
+            "secret_present":   int(bool(result.get("secret_present"))),
             "partial_leak":     int(bool(result.get("partial_leak_detected"))),
             "response_gradient": float(result.get("response_gradient", 0.0)),
             "failure_mode":     result.get("failure_mode", ""),
@@ -195,6 +211,7 @@ def upsert_attack(
             "judge_reasoning":  result.get("judge_reasoning", ""),
             "finding_tier":     finding_tier,
             "finding_path":     finding_path,
+            "experiment_path":  result.get("experiment_record"),
             "created_at":       result.get("timestamp", ""),
         },
     )

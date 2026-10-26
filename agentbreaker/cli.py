@@ -37,6 +37,7 @@ from .artifact_paths import (
 )
 from .control_plane import serve_control_plane
 from .plugins import match_provider, provider_catalog, provider_presets, switch_model
+from .strategies import strategy_catalog
 from . import ROOT
 ENV_FILE_PATH = ROOT / ".env"
 load_dotenv(ENV_FILE_PATH)
@@ -65,6 +66,7 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ("add-api", "Configure API credentials in .env and optionally bind judge/generator."),
             ("model", "Switch the judge or generator model using a builtin provider."),
             ("plugins", "List builtin model providers."),
+            ("strategies", "List builtin attack strategies."),
             ("add-target", "Register a target from a URL or model name."),
             ("validate", "Check config shape and referenced environment variables."),
             ("remove-target", "Remove a target entry from target_config.yaml."),
@@ -1587,6 +1589,19 @@ def _cmd_plugins(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_strategies(args: argparse.Namespace) -> int:
+    catalog = strategy_catalog()
+    if args.json:
+        _print_json(catalog)
+        return 0
+    print("Builtin attack strategies:\n")
+    for plugin in catalog:
+        print(f"  {_style(str(plugin['id']), '1')}  [{plugin['category']}]")
+        print(f"    {plugin['description']}")
+        print(f"    owasp={plugin['owasp_ref']}  benchmark={plugin['benchmark_ref'] or '-'}")
+    return 0
+
+
 def _cmd_model(args: argparse.Namespace) -> int:
     config_path = Path(getattr(args, "config", DEFAULT_CONFIG_PATH))
     config = _load_config(config_path) if config_path.exists() else {}
@@ -1747,6 +1762,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_plugins = subparsers.add_parser("plugins", help="List builtin model providers.")
     p_plugins.add_argument("--json", action="store_true")
     p_plugins.set_defaults(func=_cmd_plugins)
+
+    p_strategies = subparsers.add_parser("strategies", help="List builtin attack strategies.")
+    p_strategies.add_argument("--json", action="store_true")
+    p_strategies.set_defaults(func=_cmd_strategies)
 
     p_model = subparsers.add_parser("model", help="Show or switch the judge/generator model.")
     p_model.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
