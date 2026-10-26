@@ -43,7 +43,7 @@ STRONG_PROMPT = (
 )
 
 
-def _config(path: Path, model: str, system_prompt: str) -> None:
+def _config(path: Path, model: str, system_prompt: str, canary: str) -> None:
     prompt_lines = "\n".join(f"        {line}" for line in system_prompt.splitlines())
     path.write_text(
         "\n".join(
@@ -73,6 +73,8 @@ def _config(path: Path, model: str, system_prompt: str) -> None:
                 "    api_key_env: OPENROUTER_API_KEY",
                 "    endpoint: https://openrouter.ai/api/v1",
                 "    max_tokens: 400",
+                "    protected_values:",
+                f"    - {canary}",
                 "    system_prompt: |",
                 prompt_lines,
                 "",
@@ -163,8 +165,8 @@ class OpenRouterFrontierTests(unittest.TestCase):
             number = 1
             for model in FRONTIER_MODELS:
                 for label, prompt in (("weak", WEAK_PROMPT), ("strong", STRONG_PROMPT)):
-                    _config(config, model, prompt)
                     canary = "WEAK-CANARY-7F3A" if label == "weak" else "STRONG-CANARY-91C2"
+                    _config(config, model, prompt, canary)
                     for strategy in STRATEGIES:
                         result = _run(root, config, strategy, f"ATK-95{number:03d}", canary)
                         number += 1
@@ -174,6 +176,7 @@ class OpenRouterFrontierTests(unittest.TestCase):
                                 "prompt": label,
                                 "strategy": strategy,
                                 "breach": bool(result.get("breach_detected")),
+                                "secret_present": bool(result.get("secret_present")),
                                 "vulnerability": result.get("vulnerability"),
                                 "failure_mode": result.get("failure_mode"),
                                 "response_cluster": result.get("response_cluster"),
@@ -186,8 +189,9 @@ class OpenRouterFrontierTests(unittest.TestCase):
         _write_report(rows)
         print("\n".join(
             f"{row['model']} {row['prompt']} {row['strategy']} "
-            f"breach={row['breach']} vuln={row['vulnerability']} "
-            f"failure={row['failure_mode']} canary={row['canary_in_response']}"
+            f"breach={row['breach']} secret={row['secret_present']} "
+            f"vuln={row['vulnerability']} failure={row['failure_mode']} "
+            f"canary={row['canary_in_response']}"
             for row in rows
         ))
 

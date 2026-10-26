@@ -1277,6 +1277,7 @@ def _run_once() -> dict:
         "composite":          scores.composite,
         "asr":                scores.asr,
         "breach_detected":    scores.breach_detected,
+        "secret_present":     scores.secret_present,
         "judge_reasoning":    scores.judge_reasoning,
         "failure_mode":       scores.failure_mode,
         "response_cluster":   scores.response_cluster,
