@@ -47,9 +47,9 @@ function ProgressRing({ ratio, size = 24, strokeWidth = 3 }: { ratio: number; si
   return (
     <svg width={size} height={size} className="shrink-0 -rotate-90">
       <circle cx={size / 2} cy={size / 2} r={r} fill="none"
-        stroke="hsl(var(--muted))" strokeWidth={strokeWidth} />
+        stroke="var(--muted)" strokeWidth={strokeWidth} />
       <circle cx={size / 2} cy={size / 2} r={r} fill="none"
-        stroke="hsl(var(--primary))" strokeWidth={strokeWidth}
+        stroke="var(--primary)" strokeWidth={strokeWidth}
         strokeDasharray={`${filled} ${circ - filled}`}
         strokeLinecap="round"
         className="transition-all duration-700" />
@@ -420,7 +420,7 @@ function CompositeSparkline({ data }: { data: Array<{ index: number; composite: 
           <Line
             type="monotone"
             dataKey="composite"
-            stroke="hsl(var(--primary))"
+            stroke="var(--primary)"
             strokeWidth={1.5}
             dot={<SparklineDot />}
             activeDot={{ r: 4, strokeWidth: 0 }}
@@ -528,7 +528,7 @@ function ScoreHistogram({ compositeTrend }: { compositeTrend: Array<{ composite:
           <BarChart data={data} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
             <XAxis dataKey="name" tick={{ fontSize: 8 }} tickLine={false} axisLine={false} />
             <Tooltip
-              contentStyle={{ fontSize: 11, borderRadius: 6, border: '1px solid hsl(var(--border))', background: 'hsl(var(--card))' }}
+              contentStyle={{ fontSize: 11, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--card)' }}
               formatter={(value: unknown) => [`${value} attacks`, 'Count']}
             />
             <Bar dataKey="count" radius={[3, 3, 0, 0]} isAnimationActive={false}>

@@ -177,8 +177,8 @@ export function Targets() {
     <div className="grid gap-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-xs uppercase tracking-widest text-muted-foreground mb-1">Targets</p>
-          <h1 className="text-3xl font-bold mb-1">Configured targets</h1>
+          <p className="kagex-label kagex-kicker text-muted-foreground mb-2">Targets</p>
+          <h1 className="kagex-title mb-2">Configured targets</h1>
           <p className="text-muted-foreground text-sm">Every system in the config, including ones still waiting for a scan. Finding counts come from saved finding files.</p>
         </div>
         <DataAge generatedAt={data.generated_at} onRefresh={() => refetch()} isRefetching={isFetching} />

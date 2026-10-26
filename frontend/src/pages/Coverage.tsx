@@ -604,8 +604,8 @@ export function Coverage() {
   return (
     <div className="grid gap-6">
       <div>
-        <p className="text-xs uppercase tracking-widest text-muted-foreground mb-1">Analysis</p>
-        <h1 className="text-3xl font-bold mb-1">Coverage & Frameworks</h1>
+        <p className="kagex-label kagex-kicker text-muted-foreground mb-2">Analysis</p>
+        <h1 className="kagex-title mb-2">Coverage & Frameworks</h1>
         <p className="text-muted-foreground text-sm">Attack coverage matrix, MITRE ATLAS technique rollup, and OWASP LLM Top 10 risk analysis.</p>
       </div>
 

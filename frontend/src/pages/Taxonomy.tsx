@@ -379,7 +379,8 @@ export default function Taxonomy() {
     <div className="space-y-6 p-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">Taxonomy</h1>
+          <p className="kagex-label kagex-kicker text-muted-foreground mb-2">Taxonomy</p>
+          <h1 className="kagex-title">Taxonomy</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Attack categories, Arc PI intelligence, and seed library
           </p>

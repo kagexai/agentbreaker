@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { Moon, Sun, Shield } from 'lucide-react'
+import { Moon, Sun } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { cn } from '@/lib/utils'
 
@@ -12,25 +12,32 @@ const NAV_LINKS = [
   { to: '/ops', label: 'Operations' },
 ]
 
+const THEME_KEY = 'kagex_theme'
+
 export function SiteLayout() {
-  const [dark, setDark] = useState(() =>
-    typeof window !== 'undefined'
-      ? localStorage.getItem('theme') === 'dark'
-      : false
-  )
+  const [dark, setDark] = useState(() => {
+    if (typeof window === 'undefined') return true
+    return localStorage.getItem(THEME_KEY) !== 'light'
+  })
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark)
-    localStorage.setItem('theme', dark ? 'dark' : 'light')
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+    localStorage.setItem(THEME_KEY, dark ? 'dark' : 'light')
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#111214' : '#fbfbfb')
   }, [dark])
 
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="border-b border-border bg-card/80 backdrop-blur-sm sticky top-0 z-50">
-        <div className="max-w-[1320px] mx-auto px-6 flex items-center gap-6 h-14">
-          <NavLink to="/" className="flex items-center gap-2 text-primary font-semibold shrink-0">
-            <Shield className="w-5 h-5" />
-            AgentBreaker
+        <div className="max-w-[80rem] mx-auto px-8 flex items-center gap-6 min-h-[4.5rem]">
+          <NavLink to="/" className="flex items-center gap-2.5 shrink-0">
+            <img src="/logoW.svg" alt="" className="hidden dark:block h-8 w-8" />
+            <img src="/logo.svg" alt="" className="block dark:hidden h-8 w-8" />
+            <span className="leading-none">
+              <span className="block font-extrabold tracking-[-0.04em] text-foreground">KageX</span>
+              <span className="kagex-label text-muted-foreground">AgentBreaker</span>
+            </span>
           </NavLink>
           <nav className="flex items-center gap-1 flex-1">
             {NAV_LINKS.map(({ to, label, exact }) => (
@@ -60,7 +67,7 @@ export function SiteLayout() {
           </button>
         </div>
       </header>
-      <main className="max-w-[1320px] mx-auto px-6 py-8">
+      <main className="max-w-[80rem] mx-auto px-8 py-8">
         <Outlet />
       </main>
     </div>

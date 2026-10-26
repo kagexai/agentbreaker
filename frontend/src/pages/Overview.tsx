@@ -68,8 +68,8 @@ export function Overview() {
     <div className="grid gap-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-xs uppercase tracking-widest text-muted-foreground mb-1">AgentBreaker</p>
-          <h1 className="text-3xl font-bold mb-1">Workspace</h1>
+          <p className="kagex-label kagex-kicker text-muted-foreground mb-2">AgentBreaker</p>
+          <h1 className="kagex-title mb-2">Workspace</h1>
           <p className="text-muted-foreground text-sm">{data.headline}</p>
         </div>
         <DataAge generatedAt={data.generated_at} onRefresh={() => refetch()} isRefetching={isFetching} />

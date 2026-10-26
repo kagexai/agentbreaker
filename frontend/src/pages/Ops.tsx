@@ -281,8 +281,8 @@ export function Ops() {
   return (
     <div className="grid gap-8">
       <div>
-        <p className="text-xs uppercase tracking-widest text-muted-foreground mb-1">Operations</p>
-        <h1 className="text-3xl font-bold mb-1">Control Plane Operations</h1>
+        <p className="kagex-label kagex-kicker text-muted-foreground mb-2">Operations</p>
+        <h1 className="kagex-title mb-2">Control Plane Operations</h1>
         <p className="text-muted-foreground text-sm">Launch scans, manage targets, configure API providers, and monitor jobs.</p>
       </div>
 

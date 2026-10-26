@@ -351,8 +351,8 @@ export function Regressions() {
     <div className="grid gap-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-xs uppercase tracking-widest text-muted-foreground mb-1">Regressions</p>
-          <h1 className="text-3xl font-bold mb-1">Regression Library</h1>
+          <p className="kagex-label kagex-kicker text-muted-foreground mb-2">Regressions</p>
+          <h1 className="kagex-title mb-2">Regression Library</h1>
           <p className="text-muted-foreground text-sm">Confirmed findings and high-signal attack results across all targets and campaigns.</p>
         </div>
         <DataAge generatedAt={data.generated_at} onRefresh={() => refetch()} isRefetching={isFetching} />
