@@ -135,6 +135,7 @@ export function Ops() {
   if (error) return <p className="text-destructive">Failed to load: {error.message}</p>
   if (!data) return null
 
+  const providers = data.api_config.providers ?? []
   const engines = [data.api_config.judge, data.api_config.generator].filter(
     (engine): engine is NonNullable<typeof engine> => Boolean(engine)
   )
@@ -186,13 +187,20 @@ export function Ops() {
     }
     try {
       if (isLlmCategory) {
-        if (!newTargetModel) return toast.error('Model name is required')
+        const cloudProviders = providers.filter(
+          item => item.key !== 'local' && item.key !== 'custom',
+        )
+        const selectedCloud = cloudProviders.find(item => item.key === llmApi)
+        const modelName = targetCategory === 'cloud-llm'
+          ? (newTargetModel.trim() || selectedCloud?.default_model || '')
+          : newTargetModel.trim()
+        if (!modelName) return toast.error('Model name is required')
         await addTarget.mutateAsync({
           input_kind: 'model',
-          model: newTargetModel,
+          model: modelName,
           ...(systemPrompt && { system_prompt: systemPrompt }),
           ...(newTargetId && { target_id: newTargetId }),
-          provider_kind: targetCategory === 'local-llm' ? 'local' : llmApi,
+          provider_kind: targetCategory === 'local-llm' ? 'local' : (selectedCloud?.key || llmApi),
           ...(authorizedBy && { authorized_by: authorizedBy }),
           ...(targetCategory === 'local-llm' && ollamaEndpoint && { endpoint: ollamaEndpoint }),
         })
@@ -426,7 +434,7 @@ export function Ops() {
                   <label className="text-xs text-muted-foreground mb-2 block">Target Type</label>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     {([
-                      { id: 'cloud-llm', label: 'Cloud LLM', desc: 'OpenAI, Anthropic, Gemini, Grok', icon: '🌐' },
+                      { id: 'cloud-llm', label: 'Cloud LLM', desc: 'OpenRouter, OpenAI, Anthropic, Gemini', icon: '🌐' },
                       { id: 'local-llm', label: 'Local LLM', desc: 'Ollama, LM Studio, vLLM', icon: '🖥' },
                       { id: 'http-api', label: 'HTTP API', desc: 'Custom chatbot endpoint', icon: '🔗' },
                       { id: 'ctf', label: 'CTF / Lab', desc: 'PromptTrace, Resistance, etc.', icon: '🏴' },
@@ -450,30 +458,54 @@ export function Ops() {
                 </div>
 
                 {/* Cloud LLM fields */}
-                {targetCategory === 'cloud-llm' && (
+                {targetCategory === 'cloud-llm' && (() => {
+                  const cloudProviders = providers.filter(
+                    item => item.key !== 'local' && item.key !== 'custom',
+                  )
+                  const selectedCloud = cloudProviders.find(item => item.key === llmApi) ?? cloudProviders[0]
+                  const cloudModels = selectedCloud?.models ?? []
+                  const shownModel = newTargetModel || selectedCloud?.default_model || ''
+                  return (
                   <div className="grid sm:grid-cols-2 gap-3">
                     <div>
                       <label className="text-xs text-muted-foreground mb-1 block">API Provider</label>
-                      <Select value={llmApi} onValueChange={setLlmApi}>
+                      <Select value={selectedCloud?.key || llmApi} onValueChange={next => {
+                        const plugin = cloudProviders.find(item => item.key === next)
+                        setLlmApi(next)
+                        setNewTargetModel(plugin?.default_model || '')
+                      }}>
                         <SelectTrigger><SelectValue /></SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="openai">OpenAI (GPT-4o, o3, o4-mini, …)</SelectItem>
-                          <SelectItem value="anthropic">Anthropic (Claude Opus, Sonnet, Haiku)</SelectItem>
-                          <SelectItem value="gemini">Google (Gemini Pro, Flash)</SelectItem>
-                          <SelectItem value="groq">Groq (Llama, Mixtral)</SelectItem>
+                          {cloudProviders.map(item => (
+                            <SelectItem key={item.key} value={item.key}>{item.label}</SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                     </div>
-                    <div>
+                    <div className="grid gap-2">
                       <label className="text-xs text-muted-foreground mb-1 block">Model *</label>
+                      {cloudModels.length > 0 && (
+                        <Select
+                          value={cloudModels.includes(shownModel) ? shownModel : cloudModels[0]}
+                          onValueChange={setNewTargetModel}
+                        >
+                          <SelectTrigger><SelectValue placeholder="Builtin model" /></SelectTrigger>
+                          <SelectContent>
+                            {cloudModels.map(item => (
+                              <SelectItem key={item} value={item}>{item}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
                       <Input
-                        placeholder={llmApi === 'anthropic' ? 'claude-sonnet-4-20250514' : llmApi === 'gemini' ? 'gemini-2.5-pro' : 'gpt-4o'}
-                        value={newTargetModel}
+                        placeholder={selectedCloud?.default_model || 'model id'}
+                        value={shownModel}
                         onChange={e => setNewTargetModel(e.target.value)}
                       />
                     </div>
                   </div>
-                )}
+                  )
+                })()}
 
                 {/* Local LLM fields */}
                 {targetCategory === 'local-llm' && (

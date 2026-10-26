@@ -117,6 +117,24 @@ class TargetWriteTests(unittest.TestCase):
             self.assertIn("https://api.groq.com/openai/v1", saved)
             self.assertNotIn("11434", saved)
 
+    def test_openrouter_slash_model_keeps_openrouter_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            config_path = Path(temp) / "target_config.yaml"
+            config_path.write_text("targets: []\n", encoding="utf-8")
+            result = _build_target_from_payload(
+                {
+                    "input_kind": "model",
+                    "model": "openai/gpt-5.6-sol",
+                    "provider_kind": "openrouter",
+                },
+                config_path=config_path,
+            )
+            self.assertEqual(result["target_id"], "openai-gpt-5-6-sol")
+            saved = config_path.read_text(encoding="utf-8")
+            self.assertIn("https://openrouter.ai/api/v1", saved)
+            self.assertIn("OPENROUTER_API_KEY", saved)
+            self.assertIn("openai/gpt-5.6-sol", saved)
+
 
 class FrontendAssetTests(unittest.TestCase):
     def test_path_escape_is_not_served(self) -> None:
