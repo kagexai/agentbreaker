@@ -4,6 +4,7 @@ import {
   getJson,
   postJson,
   type OverviewPayload,
+  type WorkspacePayload,
   type CoveragePayload,
   type AtlasPayload,
   type OwaspPayload,
@@ -25,6 +26,13 @@ export function useOverview() {
   return useQuery({
     queryKey: ['overview'],
     queryFn: () => getJson<OverviewPayload>('/api/overview'),
+  })
+}
+
+export function useWorkspace() {
+  return useQuery({
+    queryKey: ['workspace'],
+    queryFn: () => getJson<WorkspacePayload>('/api/workspace'),
   })
 }
 

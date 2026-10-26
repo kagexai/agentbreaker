@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 from . import ROOT as REPO_ROOT
 from .domain_helpers import coerce_messages as _coerce_messages
 from .response_analysis import response_cluster
+from .operator import build_workspace
 from .plugins import match_provider, provider_catalog, provider_presets, require_provider, switch_model
 from .taxonomy_loader import applicable_categories, load_taxonomy
 
@@ -3477,6 +3478,9 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
         if path == "/api/overview":
             self._send_json(build_overview())
             return
+        if path == "/api/workspace":
+            self._send_json(_cached_value("workspace", build_workspace))
+            return
         if path == "/api/ops":
             self._send_json(_ops_state())
             return
@@ -3763,7 +3767,7 @@ def serve_control_plane(*, host: str = "127.0.0.1", port: int = 1337) -> None:
         print("[control-plane] React build not found. Serving the built-in dashboard.")
         print("[control-plane] For the full UI: cd frontend && npm install && npm run build")
     print("[control-plane] Pages: /, /targets, /ops, /coverage, /atlas, /regressions, /targets/<target>")
-    print("[control-plane] APIs: /api/overview, /api/ops, /api/ops/jobs, /api/ops/add-target, /api/ops/edit-target, /api/ops/remove-target, /api/coverage, /api/atlas, /api/owasp, /api/regressions")
+    print("[control-plane] APIs: /api/workspace, /api/overview, /api/ops, /api/ops/jobs, /api/ops/add-target, /api/ops/edit-target, /api/ops/remove-target, /api/coverage, /api/atlas, /api/owasp, /api/regressions")
     print("[control-plane] Target APIs: /api/targets/<target>/{profile|profile-story|coverage|owasp|mitre-atlas|findings|evaluations|campaigns|vulnerabilities|trends|missions|graph|regressions}")
     try:
         server.serve_forever()

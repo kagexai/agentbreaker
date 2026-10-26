@@ -148,6 +148,12 @@ class ControlPlaneHttpTests(unittest.TestCase):
                     payload = json.loads(response.read().decode("utf-8"))
                     self.assertTrue(payload["ok"])
 
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/workspace", timeout=20) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                    self.assertIn("targets", payload)
+                    self.assertIn("engines", payload)
+                    self.assertGreaterEqual(payload["counts"]["configured"], 1)
+
                 request = urllib.request.Request(f"http://127.0.0.1:{port}/api/targets/..%2F..%2F.env")
                 with self.assertRaises(urllib.error.HTTPError) as raised:
                     urllib.request.urlopen(request, timeout=10)

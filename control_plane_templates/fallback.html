@@ -44,25 +44,30 @@
     function fail(message) {
       targets.innerHTML = '<p class="error">' + message + '</p>'
     }
-    Promise.all([
-      fetch('/api/overview').then(r => { if (!r.ok) throw new Error('overview ' + r.status); return r.json() }),
-      fetch('/api/ops').then(r => { if (!r.ok) throw new Error('ops ' + r.status); return r.json() }),
-    ]).then(([overview, ops]) => {
-      const s = overview.stats || {}
+    function esc(value) {
+      return String(value ?? '').replace(/[&<>"']/g, function (ch) {
+        return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]
+      })
+    }
+    fetch('/api/workspace').then(r => { if (!r.ok) throw new Error('workspace ' + r.status); return r.json() })
+      .then((workspace) => {
+      const counts = workspace.counts || {}
+      const judge = (workspace.engines && workspace.engines.judge) || {}
       stats.innerHTML = [
-        card('Targets', overview.target_count ?? 0),
-        card('Attacks', s.total_attacks ?? 0),
-        card('Findings', s.total_success_findings ?? 0),
-        card('Active jobs', (ops.stats && ops.stats.active_jobs) || 0),
+        card('Configured', counts.configured ?? 0),
+        card('Findings', counts.success_findings ?? 0),
+        card('Campaign attacks', counts.attacks ?? 0),
+        card('Judge', judge.ready ? 'ready' : 'blocked'),
       ].join('')
-      const rows = overview.targets || []
+      const rows = workspace.targets || []
+      const headline = '<p>' + esc(workspace.headline || '') + '</p>'
       if (!rows.length) {
-        targets.innerHTML = '<p>No configured targets yet. Use <code>agentbreaker add-target</code> or the full UI.</p>'
+        targets.innerHTML = headline + '<p>No configured targets yet. Use <code>agentbreaker add-target</code> or the full UI.</p>'
         return
       }
-      targets.innerHTML = '<table><thead><tr><th>Target</th><th>Provider</th><th>Attacks</th><th>Peak</th></tr></thead><tbody>'
-        + rows.map(row => '<tr><td><a href="/api/targets/' + encodeURIComponent(row.target_id) + '">' + row.target_id + '</a></td><td>'
-          + (row.provider || '') + '</td><td>' + (row.attack_count || 0) + '</td><td>' + (row.peak_composite || 0) + '</td></tr>').join('')
+      targets.innerHTML = headline + '<table><thead><tr><th>Target</th><th>Status</th><th>Findings</th><th>Attacks</th></tr></thead><tbody>'
+        + rows.map(row => '<tr><td><a href="/api/targets/' + encodeURIComponent(row.target_id) + '">' + esc(row.target_id) + '</a></td><td>'
+          + esc(row.status) + '</td><td>' + esc((row.findings && row.findings.success) || 0) + '</td><td>' + esc(row.attack_count || 0) + '</td></tr>').join('')
         + '</tbody></table>'
     }).catch(err => fail(err.message || 'Failed to load the control plane.'))
   </script>

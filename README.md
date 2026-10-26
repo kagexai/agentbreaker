@@ -90,9 +90,10 @@ Validate config before a run:
 agentbreaker validate --check-env
 ```
 
-Inspect configured systems:
+Inspect configured systems and whether the workspace can run:
 
 ```bash
+agentbreaker workspace
 agentbreaker targets
 ```
 
@@ -108,7 +109,8 @@ agentbreaker serve --port 1337
 - `agentbreaker/campaign.py` - campaign loop and strategy selection
 - `agentbreaker/attack.py` - payload construction
 - `agentbreaker/target.py` - execution harness and scoring
-- `agentbreaker/control_plane.py` - operator backend
+- `agentbreaker/operator/` - workspace readiness, targets, and next action
+- `agentbreaker/control_plane.py` - operator HTTP API
 - `frontend/` - control plane frontend
 - `taxonomy/agentbreaker_taxonomy.yaml` - strategy library
 - `target_config.yaml` - system and model configuration

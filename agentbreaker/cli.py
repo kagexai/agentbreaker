@@ -83,6 +83,7 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     (
         "Inspection",
         [
+            ("workspace", "Show engine readiness, every configured target, and the next action."),
             ("targets", "List configured targets and authorization state."),
             ("artifacts", "Show resolved artifact paths for a target."),
             ("preview", "Render the current payload without executing it."),
@@ -1531,6 +1532,44 @@ def _cmd_taxonomy_unified(args: argparse.Namespace, *, category_arg: str | None,
     return 0
 
 
+def _cmd_workspace(args: argparse.Namespace) -> int:
+    from .operator import build_workspace
+
+    payload = build_workspace(config_path=Path(getattr(args, "config", DEFAULT_CONFIG_PATH)))
+    if args.json:
+        _print_json(payload)
+        return 0
+    counts = payload["counts"]
+    print(_style("Workspace", "1"))
+    print(payload["headline"])
+    for role in ("judge", "generator"):
+        engine = payload["engines"][role]
+        key = "key ready" if engine["api_key_present"] else f"missing {engine['api_key_env']}"
+        provider = engine["provider_id"] or engine["api"] or "unset"
+        print(f"  {role}: {engine['model'] or '(no model)'} via {provider} ({key})")
+    print(
+        f"  targets: {counts['configured']} configured, "
+        f"{counts['tested']} with campaign results, "
+        f"{counts['success_findings']} confirmed findings"
+    )
+    if payload["blocking"]:
+        print(_style("Blocking", "33"))
+        for item in payload["blocking"]:
+            print(f"  - {item}")
+    if payload["next_actions"]:
+        print("Next:")
+        for action in payload["next_actions"]:
+            print(f"  - {action['title']}: {action['detail']}")
+    print()
+    for target in payload["targets"]:
+        findings = target["findings"]["success"]
+        print(
+            f"  {target['target_id']:<28} {target['status']:<12} "
+            f"attacks {target['attack_count']:<5} findings {findings}"
+        )
+    return 0 if payload["ready"] else 2
+
+
 def _cmd_plugins(args: argparse.Namespace) -> int:
     catalog = provider_catalog()
     if args.json:
@@ -1607,6 +1646,11 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=AgentBreakerHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest="command")
+
+    p_workspace = subparsers.add_parser("workspace", help="Show readiness, configured targets, and the next action.")
+    p_workspace.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
+    p_workspace.add_argument("--json", action="store_true")
+    p_workspace.set_defaults(func=_cmd_workspace)
 
     p_targets = subparsers.add_parser("targets", help="List configured targets.")
     p_targets.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
