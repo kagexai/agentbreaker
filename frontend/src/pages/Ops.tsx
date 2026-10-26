@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useOps, useLaunchScan, useAddTarget, useRemoveTarget, useStopJob, useAddApi } from '@/hooks/useApi'
+import { useEffect, useState } from 'react'
+import { useOps, useLaunchScan, useAddTarget, useRemoveTarget, useStopJob, useAddApi, useSwitchModel } from '@/hooks/useApi'
 import { LiveAttackPanel } from '@/components/LiveAttackPanel'
 import { StatCards } from '@/components/StatCards'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -11,6 +11,74 @@ import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from 'sonner'
+import type { OpsProviderPreset } from '@/lib/api'
+
+function EngineModelSwitch({
+  role,
+  plugins,
+  providerId,
+  model,
+}: {
+  role: string
+  plugins: OpsProviderPreset[]
+  providerId?: string | null
+  model: string
+}) {
+  const switchModel = useSwitchModel()
+  const [provider, setProvider] = useState(providerId || plugins[0]?.key || 'openai')
+  const [chosen, setChosen] = useState(model)
+  const plugin = plugins.find(item => item.key === provider)
+  const models = plugin?.models ?? []
+  const pluginKey = plugins.map(item => item.key).join('|')
+
+  useEffect(() => {
+    setProvider(providerId || plugins[0]?.key || 'openai')
+    setChosen(model)
+  }, [providerId, model, pluginKey, plugins])
+
+  function onProvider(next: string) {
+    const nextPlugin = plugins.find(item => item.key === next)
+    setProvider(next)
+    setChosen(nextPlugin?.default_model || '')
+  }
+
+  async function apply(event: React.FormEvent) {
+    event.preventDefault()
+    try {
+      await switchModel.mutateAsync({ role, provider, model: chosen })
+      toast.success(`Switched ${role} to ${chosen || plugin?.default_model}`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Model switch failed')
+    }
+  }
+
+  return (
+    <form onSubmit={apply} className="grid gap-2 pt-1">
+      <Select value={provider} onValueChange={onProvider}>
+        <SelectTrigger><SelectValue placeholder="Provider" /></SelectTrigger>
+        <SelectContent>
+          {plugins.map(item => (
+            <SelectItem key={item.key} value={item.key}>{item.label}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {models.length > 0 && (
+        <Select value={models.includes(chosen) ? chosen : models[0]} onValueChange={setChosen}>
+          <SelectTrigger><SelectValue placeholder="Builtin model" /></SelectTrigger>
+          <SelectContent>
+            {models.map(item => (
+              <SelectItem key={item} value={item}>{item}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+      <Input value={chosen} onChange={event => setChosen(event.target.value)} placeholder="Model id" />
+      <Button type="submit" size="sm" variant="outline" disabled={switchModel.isPending}>
+        {switchModel.isPending ? 'Switching…' : 'Use this model'}
+      </Button>
+    </form>
+  )
+}
 
 function StatusBadge({ status }: { status: string }) {
   const s = status?.toLowerCase()
@@ -653,6 +721,12 @@ export function Ops() {
                           {e.endpoint && (
                             <p className="text-[10px] font-mono text-muted-foreground/50 truncate">{e.endpoint}</p>
                           )}
+                          <EngineModelSwitch
+                            role={e.role}
+                            plugins={data.api_config.providers ?? []}
+                            providerId={e.provider_id}
+                            model={e.model}
+                          />
                         </div>
                       ) : (
                         <p className="text-xs text-muted-foreground">Not configured — set up via the form above or <code className="text-[10px]">.env</code> file.</p>
@@ -681,7 +755,7 @@ export function Ops() {
               {/* Available provider presets */}
               {(data.api_config.providers?.length ?? 0) > 0 && (
                 <div>
-                  <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2.5">Available Providers</p>
+                  <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2.5">Builtin providers</p>
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
                     {data.api_config.providers!.map(p => (
                       <div key={p.key} className="rounded-md border border-border px-3 py-2 text-center hover:border-primary/30 transition-colors">

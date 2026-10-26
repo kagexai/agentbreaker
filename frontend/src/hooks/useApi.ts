@@ -165,6 +165,15 @@ export function useAddApi() {
   })
 }
 
+export function useSwitchModel() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: { role: string; provider: string; model?: string }) =>
+      postJson('/api/ops/model', payload),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ops'] }),
+  })
+}
+
 // ── Live attack stream ────────────────────────────────────────────────────────
 
 export type AttackStep = 'plan' | 'generate' | 'judge' | 'result'

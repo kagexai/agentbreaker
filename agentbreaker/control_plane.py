@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 from . import ROOT as REPO_ROOT
 from .domain_helpers import coerce_messages as _coerce_messages
 from .response_analysis import response_cluster
+from .plugins import match_provider, provider_catalog, provider_presets, require_provider, switch_model
 from .taxonomy_loader import applicable_categories, load_taxonomy
 
 ARTIFACTS_ROOT = REPO_ROOT / "artifacts"
@@ -58,50 +59,7 @@ _AI_SUMMARY_CACHE: dict[str, tuple[str, int, str]] = {}
 _OPS_JOBS: dict[str, dict[str, Any]] = {}
 _OPS_LOCK = threading.Lock()
 _OPS_MAX_LOG_LINES = 500
-CONTROL_PLANE_API_PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
-    "openai": {
-        "label": "OpenAI",
-        "api": "openai",
-        "api_key_env": "OPENAI_API_KEY",
-        "endpoint": None,
-        "default_model": "gpt-5.4",
-    },
-    "anthropic": {
-        "label": "Anthropic",
-        "api": "anthropic",
-        "api_key_env": "ANTHROPIC_API_KEY",
-        "endpoint": None,
-        "default_model": "claude-sonnet-4-5",
-    },
-    "google": {
-        "label": "Google Gemini",
-        "api": "openai-compatible",
-        "api_key_env": "GOOGLE_API_KEY",
-        "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai",
-        "default_model": "gemini-2.5-pro",
-    },
-    "local": {
-        "label": "Local OpenAI-compatible",
-        "api": "openai-compatible",
-        "api_key_env": None,
-        "endpoint": "http://localhost:11434/v1",
-        "default_model": "llama3.1",
-    },
-    "groq": {
-        "label": "Groq",
-        "api": "openai-compatible",
-        "api_key_env": "GROQ_API_KEY",
-        "endpoint": "https://api.groq.com/openai/v1",
-        "default_model": "llama-3.3-70b-versatile",
-    },
-    "custom": {
-        "label": "Custom API",
-        "api": "openai-compatible",
-        "api_key_env": "CUSTOM_API_KEY",
-        "endpoint": "",
-        "default_model": "custom-model",
-    },
-}
+CONTROL_PLANE_API_PROVIDER_PRESETS: dict[str, dict[str, Any]] = provider_presets()
 
 
 @dataclass(frozen=True)
@@ -896,6 +854,11 @@ def _api_config_state(
         secret = os.environ.get(str(env_var or ""), "") if env_var else ""
         return {
             "role": role,
+            "provider_id": match_provider(
+                str(defaults.get("api", "") or ""),
+                str(env_var) if env_var else None,
+                str(defaults.get("endpoint") or "") or None,
+            ),
             "api": defaults.get("api", ""),
             "model": defaults.get("model", ""),
             "api_key_env": env_var,
@@ -909,17 +872,8 @@ def _api_config_state(
     return {
         "generated_at": _now_iso(),
         "env_file": str(env_path.relative_to(REPO_ROOT)) if env_path.is_relative_to(REPO_ROOT) else str(env_path),
-        "providers": [
-            {
-                "key": key,
-                "label": value["label"],
-                "default_model": value["default_model"],
-                "api": value["api"],
-                "api_key_env": value["api_key_env"],
-                "endpoint": value["endpoint"],
-            }
-            for key, value in CONTROL_PLANE_API_PROVIDER_PRESETS.items()
-        ],
+        "providers": provider_catalog(),
+        "plugins": provider_catalog(),
         "judge": _engine_state("judge"),
         "generator": _engine_state("generator"),
         "planner": {
@@ -939,9 +893,9 @@ def _configure_api_from_payload(
     config = _read_yaml(resolved_config_path) if resolved_config_path.exists() else {}
 
     provider = str(payload.get("provider", "") or "").strip().lower()
-    if provider not in CONTROL_PLANE_API_PROVIDER_PRESETS:
-        raise ValueError(f"Unsupported provider '{provider}'.")
-    preset = dict(CONTROL_PLANE_API_PROVIDER_PRESETS[provider])
+    plugin = require_provider(provider)
+    provider = plugin.id
+    preset = dict(plugin.as_preset())
     label = preset["label"]
 
     bind = str(payload.get("bind", "none") or "none").strip().lower()
@@ -1527,6 +1481,28 @@ def _require_safe_id(value: str, label: str = "target id") -> str:
             f"{label} must be 1-128 characters and use only letters, numbers, dots, hyphens, or underscores."
         )
     return cleaned
+
+
+def _switch_model_from_payload(
+    payload: dict[str, Any],
+    *,
+    config_path: Path | None = None,
+) -> dict[str, Any]:
+    resolved_config_path = config_path or TARGET_CONFIG_PATH
+    config = _read_yaml(resolved_config_path) if resolved_config_path.exists() else {}
+    result = switch_model(
+        config,
+        role=str(payload.get("role", "") or ""),
+        provider=str(payload.get("provider", "") or ""),
+        model=str(payload.get("model", "") or ""),
+        endpoint=str(payload.get("endpoint", "") or ""),
+    )
+    _write_target_config(config, resolved_config_path)
+    _invalidate_control_plane_cache()
+    result["message"] = (
+        f"Switched {', '.join(result['roles'])} to {result['label']} / {result['model']}."
+    )
+    return result
 
 
 def _build_scan_command(payload: dict[str, Any]) -> tuple[list[str], str, str]:
@@ -3605,6 +3581,9 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             if len(parts) == 5:   # api / ops / jobs / {job_id} / stream
                 self._send_sse_stream(parts[3])
                 return
+        if path == "/api/plugins":
+            self._send_json({"generated_at": _now_iso(), "plugins": provider_catalog()})
+            return
         if path == "/api/taxonomy":
             self._send_json(build_taxonomy_tree())
             return
@@ -3640,6 +3619,9 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/ops/add-api":
                 self._send_json(_configure_api_from_payload(payload), status=201)
+                return
+            if path == "/api/ops/model":
+                self._send_json(_switch_model_from_payload(payload))
                 return
             if path == "/api/ops/scan":
                 command, label, target_id = _build_scan_command(payload)

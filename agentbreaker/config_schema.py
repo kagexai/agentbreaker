@@ -22,6 +22,7 @@ import yaml
 
 from . import ROOT
 from .llm_error_utils import api_key_mismatch_warning, normalize_openai_base_url
+from .plugins import list_providers
 
 
 # ---------------------------------------------------------------------------
@@ -271,24 +272,22 @@ def detect_model_family(
     return None
 
 
-# Explicit provider choices from the control plane. These win over name
+def _family_presets() -> dict[str, tuple[str, str | None, str | None]]:
+    """Provider ids and aliases from the builtin plugin registry."""
+    presets: dict[str, tuple[str, str | None, str | None]] = {}
+    for plugin in list_providers():
+        if plugin.id == "custom":
+            continue
+        record = (plugin.api, plugin.api_key_env, plugin.endpoint)
+        presets[plugin.id] = record
+        for alias in plugin.aliases:
+            presets[alias] = record
+    return presets
+
+
+# Explicit provider choices from the builtin plugins. These win over name
 # detection so a Groq-hosted Llama model is not saved as a local Ollama target.
-LLM_PROVIDER_PRESETS: dict[str, tuple[str, str | None, str | None]] = {
-    "openai": ("openai", "OPENAI_API_KEY", None),
-    "anthropic": ("anthropic", "ANTHROPIC_API_KEY", None),
-    "gemini": (
-        "openai-compatible",
-        "GOOGLE_API_KEY",
-        "https://generativelanguage.googleapis.com/v1beta/openai",
-    ),
-    "google": (
-        "openai-compatible",
-        "GOOGLE_API_KEY",
-        "https://generativelanguage.googleapis.com/v1beta/openai",
-    ),
-    "groq": ("openai-compatible", "GROQ_API_KEY", "https://api.groq.com/openai/v1"),
-    "local": ("openai-compatible", None, "http://localhost:11434/v1"),
-}
+LLM_PROVIDER_PRESETS: dict[str, tuple[str, str | None, str | None]] = _family_presets()
 
 
 def resolve_llm_family(

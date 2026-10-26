@@ -36,6 +36,7 @@ from .artifact_paths import (
     validation_report_path,
 )
 from .control_plane import serve_control_plane
+from .plugins import match_provider, provider_catalog, provider_presets, switch_model
 from . import ROOT
 ENV_FILE_PATH = ROOT / ".env"
 load_dotenv(ENV_FILE_PATH)
@@ -56,55 +57,14 @@ AGENTBREAKER_LOGO = [
     r"| |_) |  _ <| |___ / ___ \| . \| |___|  _ <",
     r"|____/|_| \_\_____/_/   \_\_|\_\_____|_| \_\\",
 ]
-API_PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
-    "openai": {
-        "label": "OpenAI",
-        "api": "openai",
-        "api_key_env": "OPENAI_API_KEY",
-        "endpoint": None,
-        "default_model": "gpt-5.4",
-    },
-    "anthropic": {
-        "label": "Anthropic",
-        "api": "anthropic",
-        "api_key_env": "ANTHROPIC_API_KEY",
-        "endpoint": None,
-        "default_model": "claude-sonnet-4-5",
-    },
-    "google": {
-        "label": "Google Gemini",
-        "api": "openai-compatible",
-        "api_key_env": "GOOGLE_API_KEY",
-        "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai",
-        "default_model": "gemini-2.5-pro",
-    },
-    "local": {
-        "label": "Local OpenAI-compatible",
-        "api": "openai-compatible",
-        "api_key_env": None,
-        "endpoint": "http://localhost:11434/v1",
-        "default_model": "llama3.1",
-    },
-    "groq": {
-        "label": "Groq",
-        "api": "openai-compatible",
-        "api_key_env": "GROQ_API_KEY",
-        "endpoint": "https://api.groq.com/openai/v1",
-        "default_model": "llama-3.3-70b-versatile",
-    },
-    "custom": {
-        "label": "Custom API",
-        "api": "openai-compatible",
-        "api_key_env": "CUSTOM_API_KEY",
-        "endpoint": "",
-        "default_model": "custom-model",
-    },
-}
+API_PROVIDER_PRESETS: dict[str, dict[str, Any]] = provider_presets()
 COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     (
         "Setup",
         [
             ("add-api", "Configure API credentials in .env and optionally bind judge/generator."),
+            ("model", "Switch the judge or generator model using a builtin provider."),
+            ("plugins", "List builtin model providers."),
             ("add-target", "Register a target from a URL or model name."),
             ("validate", "Check config shape and referenced environment variables."),
             ("remove-target", "Remove a target entry from target_config.yaml."),
@@ -239,15 +199,7 @@ def _bind_roles(bind: str | None) -> list[str]:
 
 
 def _provider_key_from_family(api: str, api_key_env: str | None, endpoint: str | None) -> str:
-    if api == "openai" and api_key_env == "OPENAI_API_KEY":
-        return "openai"
-    if api == "anthropic" and api_key_env == "ANTHROPIC_API_KEY":
-        return "anthropic"
-    if api == "openai-compatible" and api_key_env == "GOOGLE_API_KEY":
-        return "google"
-    if api == "openai-compatible" and not api_key_env and endpoint:
-        return "local"
-    return "custom"
+    return match_provider(api, api_key_env, endpoint) or "custom"
 
 
 def _engine_block_defaults(config: dict[str, Any], role: str) -> dict[str, Any]:
@@ -957,20 +909,16 @@ def _cmd_add_api(args: argparse.Namespace) -> int:
             print("Provider is required in non-interactive mode. Use --provider openai|anthropic|google|local|custom.")
             return 1
         print("AgentBreaker — Add API\n")
-        print("Providers:")
-        print("  [1] OpenAI")
-        print("  [2] Anthropic")
-        print("  [3] Google Gemini")
-        print("  [4] Local OpenAI-compatible")
-        print("  [5] Custom")
+        print("Builtin providers:")
+        ordered = list(API_PROVIDER_PRESETS)
+        for index, key in enumerate(ordered, start=1):
+            label = str(API_PROVIDER_PRESETS[key].get("label") or key)
+            print(f"  [{index}] {label} ({key})")
         provider_choice = _prompt_value("Choose provider", "1")
-        provider = {
-            "1": "openai",
-            "2": "anthropic",
-            "3": "google",
-            "4": "local",
-            "5": "custom",
-        }.get(provider_choice, provider_choice.lower())
+        if provider_choice.isdigit() and 1 <= int(provider_choice) <= len(ordered):
+            provider = ordered[int(provider_choice) - 1]
+        else:
+            provider = provider_choice.lower()
 
     if provider not in API_PROVIDER_PRESETS:
         print(f"Unsupported provider '{provider}'. Choose one of: {', '.join(API_PROVIDER_PRESETS)}")
@@ -1583,6 +1531,69 @@ def _cmd_taxonomy_unified(args: argparse.Namespace, *, category_arg: str | None,
     return 0
 
 
+def _cmd_plugins(args: argparse.Namespace) -> int:
+    catalog = provider_catalog()
+    if args.json:
+        _print_json(catalog)
+        return 0
+    print("Builtin model providers:\n")
+    for plugin in catalog:
+        models = ", ".join(str(model) for model in plugin.get("models") or [])
+        print(f"  {_style(str(plugin['id']), '1')}  {plugin['label']}")
+        print(f"    default: {plugin['default_model']}")
+        if models:
+            print(f"    models: {models}")
+        if plugin.get("endpoint"):
+            print(f"    endpoint: {plugin['endpoint']}")
+    return 0
+
+
+def _cmd_model(args: argparse.Namespace) -> int:
+    config_path = Path(getattr(args, "config", DEFAULT_CONFIG_PATH))
+    config = _load_config(config_path) if config_path.exists() else {}
+    if not args.provider and not args.model and not args.role:
+        if args.json:
+            _print_json(
+                {
+                    "judge": (config.get("judge") or {}).get("config") or {},
+                    "generator": (config.get("generator") or {}).get("config") or {},
+                    "plugins": provider_catalog(),
+                }
+            )
+            return 0
+        for role in ("judge", "generator"):
+            block = ((config.get(role) or {}).get("config") or {})
+            print(
+                f"{role}: {block.get('model') or '(unset)'} "
+                f"via {block.get('api') or '(unset)'}"
+            )
+        print("\nSwitch with: agentbreaker model --role judge --provider anthropic --model claude-sonnet-4-5")
+        return 0
+    if not args.role or not args.provider:
+        print("Both --role and --provider are required to switch models.")
+        return 1
+    try:
+        result = switch_model(
+            config,
+            role=args.role,
+            provider=args.provider,
+            model=args.model or "",
+            endpoint=args.endpoint or "",
+        )
+    except ValueError as exc:
+        print(str(exc))
+        return 1
+    _save_config(config_path, config)
+    if args.json:
+        _print_json(result)
+        return 0
+    print(
+        f"Switched {', '.join(result['roles'])} to "
+        f"{result['label']} / {result['model']}."
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = AgentBreakerArgumentParser(
         prog="agentbreaker",
@@ -1688,6 +1699,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_api.add_argument("--api-key", help="API key value. If omitted, prompts securely.")
     p_api.add_argument("--bind", choices=["none", "judge", "generator", "both"], help="Optionally bind the provider to judge/generator config.")
     p_api.set_defaults(func=_cmd_add_api)
+
+    p_plugins = subparsers.add_parser("plugins", help="List builtin model providers.")
+    p_plugins.add_argument("--json", action="store_true")
+    p_plugins.set_defaults(func=_cmd_plugins)
+
+    p_model = subparsers.add_parser("model", help="Show or switch the judge/generator model.")
+    p_model.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
+    p_model.add_argument("--role", choices=["judge", "generator", "both"], help="Engine role to switch.")
+    p_model.add_argument("--provider", help="Builtin provider id, for example openai, anthropic, groq, local.")
+    p_model.add_argument("--model", help="Model id. Defaults to the provider's builtin model.")
+    p_model.add_argument("--endpoint", help="Optional base URL override.")
+    p_model.add_argument("--json", action="store_true")
+    p_model.set_defaults(func=_cmd_model)
 
     p_add = subparsers.add_parser("add-target", help="Add a new target via smart auto-detect wizard.")
     p_add.add_argument("--url", help="URL of the target (CTF platform, HTTP endpoint, etc.).")

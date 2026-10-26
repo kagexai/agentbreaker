@@ -163,10 +163,11 @@ export interface OpsTarget {
 
 export interface OpsEngineState {
   role: string
+  provider_id?: string | null
   api: string
   model: string
-  api_key_env?: string
-  endpoint?: string
+  api_key_env?: string | null
+  endpoint?: string | null
   configured: boolean
   api_key_present: boolean
   api_key_masked: string
@@ -177,8 +178,11 @@ export interface OpsProviderPreset {
   label: string
   default_model: string
   api: string
-  api_key_env: string
-  endpoint?: string
+  api_key_env?: string | null
+  endpoint?: string | null
+  models?: string[]
+  aliases?: string[]
+  builtin?: boolean
 }
 
 export interface OpsApiConfig {
