@@ -1751,7 +1751,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_model = subparsers.add_parser("model", help="Show or switch the judge/generator model.")
     p_model.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
     p_model.add_argument("--role", choices=["judge", "generator", "both"], help="Engine role to switch.")
-    p_model.add_argument("--provider", help="Builtin provider id, for example openai, anthropic, groq, local.")
+    p_model.add_argument("--provider", help="Builtin provider id, for example openai, anthropic, openrouter, groq, local.")
     p_model.add_argument("--model", help="Model id. Defaults to the provider's builtin model.")
     p_model.add_argument("--endpoint", help="Optional base URL override.")
     p_model.add_argument("--json", action="store_true")

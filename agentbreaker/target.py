@@ -69,7 +69,10 @@ def _openai_client(api_key: str, endpoint: str | None):
 
     base_url = normalize_openai_base_url(endpoint)
     key = api_key or ("local" if base_url else None)
-    return OpenAI(api_key=key, base_url=base_url, timeout=60)
+    headers = None
+    if base_url and "openrouter.ai" in base_url:
+        headers = {"HTTP-Referer": "https://kagex.ai", "X-Title": "AgentBreaker"}
+    return OpenAI(api_key=key, base_url=base_url, timeout=90, default_headers=headers)
 
 
 # USD per 1k tokens (input, output). Extend as needed.

@@ -16,7 +16,10 @@ from agentbreaker.plugins.model_switch import switch_model
 class BuiltinRegistryTests(unittest.TestCase):
     def test_bundled_providers_register_in_order(self) -> None:
         ids = [plugin.id for plugin in list_providers()]
-        self.assertEqual(ids, ["openai", "anthropic", "google", "groq", "local", "custom"])
+        self.assertEqual(
+            ids,
+            ["openai", "anthropic", "google", "groq", "openrouter", "local", "custom"],
+        )
 
     def test_aliases_resolve_to_the_builtin(self) -> None:
         self.assertEqual(get_provider("gemini").id, "google")
