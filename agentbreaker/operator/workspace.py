@@ -171,6 +171,15 @@ def _engine_state(config: dict[str, Any], role: str, environ: Mapping[str, str])
     }
 
 
+def _owasp_refs(value: str) -> list[str]:
+    refs: list[str] = []
+    for part in re.split(r"[,;]+", value):
+        token = part.strip()
+        if token and token not in refs:
+            refs.append(token)
+    return refs
+
+
 def _empty_finding_bucket() -> dict[str, Any]:
     return {
         "tiers": {tier: 0 for tier in _FINDING_TIERS},
@@ -219,8 +228,8 @@ def _read_finding(path: Path, tier: str) -> tuple[dict[str, Any] | None, str]:
     bucket = _empty_finding_bucket()
     if category:
         bucket["categories"][category] += 1
-    if owasp:
-        bucket["owasp"].add(owasp)
+    for ref in _owasp_refs(owasp):
+        bucket["owasp"].add(ref)
     bucket["peak_composite"] = composite
     return bucket, target_id
 

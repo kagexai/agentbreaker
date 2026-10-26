@@ -62,7 +62,7 @@ class WorkspaceTests(unittest.TestCase):
             finding = root / "findings" / "success"
             finding.mkdir(parents=True)
             (finding / "ATK-1.yaml").write_text(
-                "target: demo\ncategory: prompt_injection\nowasp_ref: LLM01\nscores:\n  composite: 6.5\n",
+                "target: demo\ncategory: prompt_injection\nowasp_ref: LLM01, LLM06\nscores:\n  composite: 6.5\n",
                 encoding="utf-8",
             )
             partial = root / "findings" / "partial"
@@ -79,7 +79,8 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(demo["findings"]["partial"], 1)
             self.assertEqual(demo["attack_count"], 0)
             self.assertEqual(demo["peak_composite"], 6.5)
-            self.assertEqual(payload["frameworks"]["owasp"][0]["ref"], "LLM01")
+            refs = {item["ref"] for item in payload["frameworks"]["owasp"]}
+            self.assertEqual(refs, {"LLM01", "LLM06"})
             unsafe = payload["targets"][1]
             self.assertEqual(unsafe["attack_count"], 0)
             self.assertEqual(payload["counts"]["success_findings"], 1)
