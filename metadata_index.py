@@ -9,8 +9,8 @@ from typing import Iterable
 
 import yaml
 
-from artifact_paths import ROOT
-from response_analysis import is_low_signal_response, response_cluster
+from agentbreaker.artifact_paths import ROOT
+from agentbreaker.response_analysis import is_low_signal_response, response_cluster
 
 METADATA_DB_PATH = ROOT / "artifacts" / "metadata.sqlite3"
 _DB_LOCK = threading.Lock()

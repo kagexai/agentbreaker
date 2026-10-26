@@ -46,7 +46,8 @@ from dotenv import load_dotenv
 from jinja2 import BaseLoader, Environment
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from .llm_error_utils import describe_llm_exception
+from . import ROOT
+from .llm_error_utils import describe_llm_exception, normalize_openai_base_url
 
 from .arc_taxonomy import arc_taxonomy_reference_text
 from .response_analysis import is_infra_failure_response, is_low_signal_response, response_cluster
@@ -57,10 +58,19 @@ load_dotenv()
 # Paths and constants
 # ---------------------------------------------------------------------------
 
-CONFIG_PATH   = Path(os.environ.get("AGENTBREAKER_CONFIG_PATH", "target_config.yaml"))
+CONFIG_PATH   = Path(os.environ.get("AGENTBREAKER_CONFIG_PATH", str(ROOT / "target_config.yaml")))
 AUDIT_LOG     = Path(os.environ.get("AGENTBREAKER_AUDIT_LOG", "attack_log.jsonl"))
 STATUS_FILE   = Path(os.environ.get("AGENTBREAKER_STATUS_FILE", "status.json"))
 PROFILE_PATH  = Path(os.environ.get("AGENTBREAKER_PROFILE_PATH", "target_profile.yaml"))
+
+def _openai_client(api_key: str, endpoint: str | None):
+    """Build an OpenAI client, repairing base URLs and local dummy keys."""
+    from openai import OpenAI
+
+    base_url = normalize_openai_base_url(endpoint)
+    key = api_key or ("local" if base_url else None)
+    return OpenAI(api_key=key, base_url=base_url, timeout=60)
+
 
 # USD per 1k tokens (input, output). Extend as needed.
 _PRICING: dict[str, tuple[float, float]] = {
@@ -655,12 +665,7 @@ class LLMProvider(Provider):
         return msgs
 
     def _call_openai(self, payload: AttackPayload) -> TargetResponse:
-        from openai import OpenAI
-        client = OpenAI(
-            api_key=self._api_key or None,
-            base_url=self.config.get("endpoint"),
-            timeout=60,
-        )
+        client = _openai_client(self._api_key, self.config.get("endpoint"))
         msgs = self._openai_messages(payload)
         token_kw = (
             {"max_completion_tokens": self._max_tokens}
@@ -1381,13 +1386,12 @@ class JudgeLLM:
                 max_tokens=512, temperature=self._temp,  # type: ignore[arg-type]
             )
             return r.content[0].text
-        from openai import OpenAI
         token_kw = (
             {"max_completion_tokens": 512}
             if self._api == "openai"
             else {"max_tokens": 512}
         )
-        r = OpenAI(api_key=self._api_key, base_url=self._endpoint, timeout=60).chat.completions.create(
+        r = _openai_client(self._api_key, self._endpoint).chat.completions.create(
             model=self._model,
             messages=[{"role": "user", "content": prompt}],
             temperature=self._temp, **token_kw,

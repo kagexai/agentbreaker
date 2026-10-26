@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import csv
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -83,8 +84,15 @@ CONTROL_PLANE_API_PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         "label": "Local OpenAI-compatible",
         "api": "openai-compatible",
         "api_key_env": None,
-        "endpoint": "http://localhost:11434/v1/chat/completions",
+        "endpoint": "http://localhost:11434/v1",
         "default_model": "llama3.1",
+    },
+    "groq": {
+        "label": "Groq",
+        "api": "openai-compatible",
+        "api_key_env": "GROQ_API_KEY",
+        "endpoint": "https://api.groq.com/openai/v1",
+        "default_model": "llama-3.3-70b-versatile",
     },
     "custom": {
         "label": "Custom API",
@@ -552,9 +560,20 @@ def _findings_paths() -> list[Path]:
     return paths
 
 
+def _confined_target_root(target_id: str) -> Path | None:
+    if not _SAFE_ID.fullmatch(target_id):
+        return None
+    root = (ARTIFACTS_ROOT / target_id).resolve()
+    try:
+        root.relative_to(ARTIFACTS_ROOT.resolve())
+    except ValueError:
+        return None
+    return root
+
+
 def _target_artifact_paths(target_id: str) -> list[Path]:
-    target_root = ARTIFACTS_ROOT / target_id
-    if not target_root.exists():
+    target_root = _confined_target_root(target_id)
+    if target_root is None or not target_root.exists():
         return []
     return sorted(path for path in target_root.rglob("*") if path.is_file())
 
@@ -632,8 +651,8 @@ def _generate_ai_attack_summary(target_id: str) -> dict[str, str]:
         return {"summary": "", "error": "OPENAI_API_KEY not set — AI summary unavailable."}
 
     # find latest results TSV across all campaigns for this target
-    target_root = ARTIFACTS_ROOT / target_id
-    results_files = list(target_root.rglob(ARTIFACT_FILES["results"])) if target_root.exists() else []
+    target_root = _confined_target_root(target_id)
+    results_files = list(target_root.rglob(ARTIFACT_FILES["results"])) if target_root and target_root.exists() else []
     mtime_ns = max((f.stat().st_mtime_ns for f in results_files), default=0)
 
     cached = _AI_SUMMARY_CACHE.get(target_id)
@@ -721,7 +740,7 @@ Be direct and specific. Do not hedge or pad. Under 250 words."""
 
 def _slugify(value: str) -> str:
     slug = re.sub(r"[^a-z0-9-]+", "-", value.lower()).strip("-")
-    return slug or "target"
+    return (slug or "target")[:128]
 
 
 def _coerce_mapping(value: Any) -> dict[str, str]:
@@ -1368,16 +1387,18 @@ def _build_target_from_payload(
 ) -> dict[str, Any]:
     from .config_schema import (
         append_target_to_config,
-        detect_model_family,
         detect_platform,
         generate_llm_target,
         generate_platform_target,
         generate_target_entry,
+        resolve_llm_family,
     )
 
     resolved_config_path = config_path or TARGET_CONFIG_PATH
     input_kind = str(payload.get("input_kind", "url") or "url").strip().lower()
     target_id_override = str(payload.get("target_id", "") or "").strip()
+    if target_id_override:
+        target_id_override = _require_safe_id(target_id_override)
     authorized_by = str(payload.get("authorized_by", "") or "").strip()
     scope = str(payload.get("scope", "") or "").strip()
 
@@ -1385,7 +1406,13 @@ def _build_target_from_payload(
         model = str(payload.get("model", "") or "").strip()
         if not model:
             raise ValueError("Model name is required.")
-        family = detect_model_family(model)
+        provider_kind = str(payload.get("provider_kind", "") or "").strip().lower()
+        endpoint = str(payload.get("endpoint", "") or "").strip()
+        if endpoint:
+            parsed_endpoint = urlparse(endpoint)
+            if parsed_endpoint.scheme not in {"http", "https"} or not parsed_endpoint.netloc:
+                raise ValueError("endpoint must be an http(s) URL.")
+        family = resolve_llm_family(model, provider_kind, endpoint)
         if not family:
             raise ValueError(f"Could not detect a supported model family for '{model}'.")
         entry = generate_llm_target(
@@ -1394,7 +1421,7 @@ def _build_target_from_payload(
             system_prompt=str(payload.get("system_prompt", "") or ""),
             authorized_by=authorized_by or "Self (internal guardrail assessment)",
             scope=scope or f"Guardrail assessment of {model}",
-            target_id=target_id_override or _slugify(model),
+            target_id=_require_safe_id(target_id_override or _slugify(model)),
         )
         append_target_to_config(entry, resolved_config_path)
         _invalidate_control_plane_cache()
@@ -1417,6 +1444,7 @@ def _build_target_from_payload(
         )
         if target_id_override:
             entry["id"] = target_id_override
+        entry["id"] = _require_safe_id(str(entry.get("id", "")))
         if authorized_by:
             entry.setdefault("authorization", {})["authorized_by"] = authorized_by
         if scope:
@@ -1435,7 +1463,7 @@ def _build_target_from_payload(
         raise ValueError("provider_kind must be one of: http, browser, script.")
 
     default_target_id = _slugify(url.split("//", 1)[-1].split("/", 1)[0])
-    target_id = target_id_override or default_target_id
+    target_id = _require_safe_id(target_id_override or default_target_id)
     if provider_kind == "http":
         config: dict[str, Any] = {
             "url": url,
@@ -1489,19 +1517,28 @@ def _build_target_from_payload(
     }
 
 
+_SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _require_safe_id(value: str, label: str = "target id") -> str:
+    cleaned = (value or "").strip()
+    if not _SAFE_ID.fullmatch(cleaned):
+        raise ValueError(
+            f"{label} must be 1-128 characters and use only letters, numbers, dots, hyphens, or underscores."
+        )
+    return cleaned
+
+
 def _build_scan_command(payload: dict[str, Any]) -> tuple[list[str], str, str]:
     action = str(payload.get("action", "run") or "run").strip().lower()
-    target_id = str(payload.get("target_id", "") or "").strip()
-    if not target_id:
-        raise ValueError("Target id is required.")
+    target_id = _require_safe_id(str(payload.get("target_id", "") or ""))
     if action not in {"probe", "run"}:
         raise ValueError("Action must be either 'probe' or 'run'.")
 
     cmd = [sys.executable, "-m", "agentbreaker", action, target_id]
     campaign_tag = str(payload.get("campaign_tag", "") or "").strip()
-    if campaign_tag and not re.match(r'^[a-zA-Z0-9._-]+$', campaign_tag):
-        raise ValueError("campaign_tag must contain only alphanumeric characters, dots, hyphens, and underscores")
     if campaign_tag:
+        campaign_tag = _require_safe_id(campaign_tag, "campaign_tag")
         cmd.extend(["--campaign-tag", campaign_tag])
 
     if action == "probe":
@@ -1511,7 +1548,13 @@ def _build_scan_command(payload: dict[str, Any]) -> tuple[list[str], str, str]:
         if bool(payload.get("loop")):
             cmd.append("--loop")
         if payload.get("max_steps") not in {None, "", 0, "0"}:
-            cmd.extend(["--max-steps", str(payload.get("max_steps"))])
+            try:
+                steps = int(payload.get("max_steps"))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("max_steps must be an integer.") from exc
+            if steps < 1 or steps > 1000:
+                raise ValueError("max_steps must be between 1 and 1000.")
+            cmd.extend(["--max-steps", str(steps)])
         if bool(payload.get("skip_profile")):
             cmd.append("--skip-profile")
         if bool(payload.get("skip_attack")):
@@ -2618,7 +2661,9 @@ def build_global_owasp_report() -> dict[str, Any]:
 
 
 def _materialize_target(target_id: str, configured_target: dict[str, Any] | None = None) -> dict[str, Any]:
-    target_root = ARTIFACTS_ROOT / target_id
+    target_root = _confined_target_root(target_id)
+    if target_root is None:
+        raise ValueError(f"Invalid target id: {target_id!r}")
     campaigns = [
         _campaign_snapshot(target_id, tag, root)
         for tag, root in _artifact_campaign_dirs(target_root)
@@ -2982,7 +3027,12 @@ def _json_bytes(payload: Any) -> bytes:
 
 
 def _known_target(target_id: str) -> bool:
-    return (ARTIFACTS_ROOT / target_id).exists() or target_id in _configured_targets()
+    if _confined_target_root(target_id) is None:
+        return False
+    if target_id in _configured_targets():
+        return True
+    root = _confined_target_root(target_id)
+    return bool(root and root.is_dir())
 
 
 # ---------------------------------------------------------------------------
@@ -3428,22 +3478,17 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             self._send(204, b"", "image/x-icon")
             return
 
-        # ── React SPA static file serving ──────────────────────────────────
-        # If frontend/dist/ exists, serve built React app for all non-API routes.
-        _dist = Path(__file__).parent.parent / "frontend" / "dist"
-        if _dist.is_dir() and not path.startswith("/api/"):
-            # Serve asset files directly (JS, CSS, images, etc.)
-            _asset = (_dist / path.lstrip("/")).resolve()
-            if _asset.is_relative_to(_dist) and _asset.is_file():
-                mime, _ = mimetypes.guess_type(str(_asset))
-                self._send(200, _asset.read_bytes(), mime or "application/octet-stream")
+        if not path.startswith("/api/"):
+            asset = resolve_frontend_asset(frontend_dist_dir(), path)
+            if asset is not None:
+                mime, _ = mimetypes.guess_type(str(asset))
+                content_type = mime or "application/octet-stream"
+                if asset.suffix == ".html":
+                    content_type = "text/html; charset=utf-8"
+                self._send(200, asset.read_bytes(), content_type)
                 return
-            # All other non-asset routes → index.html (client-side routing)
-            _index = _dist / "index.html"
-            if _index.is_file():
-                self._send(200, _index.read_bytes(), "text/html")
-                return
-        # ── End React SPA serving ───────────────────────────────────────────
+            self._send(200, fallback_dashboard_bytes(), "text/html; charset=utf-8")
+            return
 
         if path == "/api/health":
             self._send_json({"ok": True, "generated_at": _now_iso()})
@@ -3489,11 +3534,12 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             if len(parts) < 3:
                 self._send_json({"error": "target id required"}, status=400)
                 return
-            target_id = unquote(parts[2]).strip()
-            if not target_id:
-                self._send_json({"error": "target id required"}, status=400)
+            try:
+                target_id = _require_safe_id(unquote(parts[2]))
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
                 return
-            if not (ARTIFACTS_ROOT / target_id).exists() and target_id not in _configured_targets():
+            if not _known_target(target_id):
                 self._send_json({"error": f"unknown target: {target_id}"}, status=404)
                 return
             report = build_target_report(target_id)
@@ -3665,9 +3711,75 @@ class _QuietThreadingHTTPServer(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+def _is_loopback_host(host: str) -> bool:
+    candidate = (host or "").strip().lower()
+    if candidate == "localhost":
+        return True
+    if candidate.startswith("[") and candidate.endswith("]"):
+        candidate = candidate[1:-1]
+    try:
+        return ipaddress.ip_address(candidate).is_loopback
+    except ValueError:
+        return False
+
+
+def assert_loopback_bind(host: str) -> None:
+    """Refuse to expose the unauthenticated control plane on a routable interface.
+
+    An empty host binds every interface on this HTTP server, so it is not treated
+    as loopback. Set AGENTBREAKER_ALLOW_REMOTE=1 to override.
+    """
+    allow_remote = os.environ.get("AGENTBREAKER_ALLOW_REMOTE", "").strip().lower() in {"1", "true", "yes", "on"}
+    if _is_loopback_host(host) or allow_remote:
+        return
+    raise SystemExit(
+        f"[control-plane] Refusing to bind non-loopback host {host!r}: the "
+        "control plane has no authentication and can launch scans. Bind "
+        "127.0.0.1 (default) and use an SSH tunnel, or set "
+        "AGENTBREAKER_ALLOW_REMOTE=1 to override at your own risk."
+    )
+
+
+def frontend_dist_dir() -> Path:
+    return (Path(__file__).resolve().parent.parent / "frontend" / "dist").resolve()
+
+
+def resolve_frontend_asset(dist: Path, url_path: str) -> Path | None:
+    """Return a file inside the built frontend, or the SPA index for client routes."""
+    if not dist.is_dir():
+        return None
+    dist = dist.resolve()
+    raw = unquote(url_path).lstrip("/")
+    if raw:
+        candidate = (dist / raw).resolve()
+        try:
+            candidate.relative_to(dist)
+        except ValueError:
+            return None
+        if candidate.is_file():
+            return candidate
+    index = (dist / "index.html").resolve()
+    try:
+        index.relative_to(dist)
+    except ValueError:
+        return None
+    return index if index.is_file() else None
+
+
+def fallback_dashboard_bytes() -> bytes:
+    path = REPO_ROOT / "control_plane_templates" / "fallback.html"
+    if path.is_file():
+        return path.read_bytes()
+    return b"<h1>AgentBreaker</h1><p>Control plane is running. Build frontend/ for the full UI.</p>"
+
+
 def serve_control_plane(*, host: str = "127.0.0.1", port: int = 1337) -> None:
+    assert_loopback_bind(host)
     server = _QuietThreadingHTTPServer((host, port), ControlPlaneHandler)
     print(f"[control-plane] Serving AgentBreaker evals at http://{host}:{port}")
+    if not (frontend_dist_dir() / "index.html").is_file():
+        print("[control-plane] React build not found. Serving the built-in dashboard.")
+        print("[control-plane] For the full UI: cd frontend && npm install && npm run build")
     print("[control-plane] Pages: /, /targets, /ops, /coverage, /atlas, /regressions, /targets/<target>")
     print("[control-plane] APIs: /api/overview, /api/ops, /api/ops/jobs, /api/ops/add-target, /api/ops/edit-target, /api/ops/remove-target, /api/coverage, /api/atlas, /api/owasp, /api/regressions")
     print("[control-plane] Target APIs: /api/targets/<target>/{profile|profile-story|coverage|owasp|mitre-atlas|findings|evaluations|campaigns|vulnerabilities|trends|missions|graph|regressions}")

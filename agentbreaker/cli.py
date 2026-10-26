@@ -82,8 +82,15 @@ API_PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         "label": "Local OpenAI-compatible",
         "api": "openai-compatible",
         "api_key_env": None,
-        "endpoint": "http://localhost:11434/v1/chat/completions",
+        "endpoint": "http://localhost:11434/v1",
         "default_model": "llama3.1",
+    },
+    "groq": {
+        "label": "Groq",
+        "api": "openai-compatible",
+        "api_key_env": "GROQ_API_KEY",
+        "endpoint": "https://api.groq.com/openai/v1",
+        "default_model": "llama-3.3-70b-versatile",
     },
     "custom": {
         "label": "Custom API",

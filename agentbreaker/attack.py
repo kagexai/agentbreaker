@@ -48,6 +48,7 @@ from pathlib import Path
 
 import yaml
 
+from . import ROOT
 from .artifact_paths import ctf_state_path, profile_path
 from .domain_helpers import DomainContext, coerce_messages, dedupe, humanize, render_structured_fields
 from .seed_manager import SeedManager, ensure_current_canary
@@ -59,7 +60,7 @@ from .target import AttackPayload, EvaluationHarness, MediaItem  # noqa: F401
 
 TARGET_ID     = os.environ.get("AGENTBREAKER_TARGET_ID", "resistance-level-1")
 ATTACK_ID     = os.environ.get("AGENTBREAKER_ATTACK_ID", "ATK-00001")
-_CONFIG_PATH  = os.environ.get("AGENTBREAKER_CONFIG_PATH")
+_CONFIG_PATH  = os.environ.get("AGENTBREAKER_CONFIG_PATH") or str(ROOT / "target_config.yaml")
 _STRATEGY_ID  = os.environ.get("AGENTBREAKER_STRATEGY", "completion_attack")
 _VARIANT_IDX  = int(os.environ.get("AGENTBREAKER_VARIANT_INDEX", "0"))
 _ANCHOR_PAYLOAD = os.environ.get("AGENTBREAKER_ANCHOR_PAYLOAD", "")
@@ -1254,7 +1255,7 @@ def build_payload() -> AttackPayload:
 def _run_once() -> dict:
     harness = EvaluationHarness(
         TARGET_ID,
-        Path(_CONFIG_PATH) if _CONFIG_PATH else Path("target_config.yaml"),
+        Path(_CONFIG_PATH),
     )
     payload = build_payload()
     scores  = harness.run_experiment(payload)

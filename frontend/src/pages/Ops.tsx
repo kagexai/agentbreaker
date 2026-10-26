@@ -15,8 +15,8 @@ import { toast } from 'sonner'
 function StatusBadge({ status }: { status: string }) {
   const s = status?.toLowerCase()
   const cls = s === 'running' ? 'bg-primary/15 text-primary'
-    : s === 'done' || s === 'finished' ? 'bg-muted text-muted-foreground'
-    : s === 'failed' || s === 'error' ? 'bg-destructive/15 text-destructive'
+    : s === 'completed' || s === 'stopped' ? 'bg-muted text-muted-foreground'
+    : s === 'failed' || s === 'interrupted' || s === 'error' ? 'bg-destructive/15 text-destructive'
     : 'bg-secondary/15 text-secondary'
   return <Badge className={`text-xs ${cls}`}>{status}</Badge>
 }
@@ -31,6 +31,7 @@ export function Ops() {
 
   // Scan form state
   const [scanTarget, setScanTarget] = useState('')
+  const [scanAction, setScanAction] = useState<'run' | 'probe'>('run')
   const [campaignTag, setCampaignTag] = useState('')
   const [maxSteps, setMaxSteps] = useState('')
   const [loop, setLoop] = useState(true)
@@ -57,20 +58,24 @@ export function Ops() {
   const isHttpCategory = targetCategory === 'http-api' || targetCategory === 'ctf'
 
   // Add API form state
-  const [apiProvider, setApiProvider] = useState('')
+  const [apiProvider, setApiProvider] = useState('openai')
   const [apiKey, setApiKey] = useState('')
   const [apiEndpoint, setApiEndpoint] = useState('')
-  const [apiBind, setApiBind] = useState('attack')
+  const [apiBind, setApiBind] = useState('both')
 
   if (isLoading) return <div className="grid gap-4"><Skeleton className="h-24" /><Skeleton className="h-64" /></div>
   if (error) return <p className="text-destructive">Failed to load: {error.message}</p>
   if (!data) return null
 
+  const engines = [data.api_config.judge, data.api_config.generator].filter(
+    (engine): engine is NonNullable<typeof engine> => Boolean(engine)
+  )
+  const readyEngines = engines.filter(engine => engine.configured && engine.api_key_present).length
   const cards = [
     { label: 'Targets', value: data.targets.length },
     { label: 'Active Jobs', value: data.jobs.filter(j => j.status === 'running').length },
     { label: 'Total Jobs', value: data.jobs.length },
-    { label: 'APIs Configured', value: Object.keys(data.api_config).length },
+    { label: 'APIs Ready', value: `${readyEngines} / ${engines.length}` },
   ]
 
   async function handleScan(e: React.FormEvent) {
@@ -82,13 +87,12 @@ export function Ops() {
     }
     try {
       await launchScan.mutateAsync({
+        action: scanAction,
         target_id: scanTarget,
         ...(campaignTag && { campaign_tag: campaignTag }),
-        ...(maxSteps && { max_steps: Math.min(1000, Math.max(1, parseInt(maxSteps))) }),
-        loop,
-        autonomous,
-        dry_run: dryRun,
-        short_prompt: shortPrompt,
+        ...(scanAction === 'run' && maxSteps && { max_steps: Math.min(1000, Math.max(1, parseInt(maxSteps))) }),
+        ...(scanAction === 'run' && { loop, dry_run: dryRun, short_prompt: shortPrompt }),
+        ...(scanAction === 'probe' && { autonomous }),
       })
       toast.success(`Scan launched for ${scanTarget}`)
       await refetch()
@@ -120,7 +124,7 @@ export function Ops() {
           model: newTargetModel,
           ...(systemPrompt && { system_prompt: systemPrompt }),
           ...(newTargetId && { target_id: newTargetId }),
-          provider_kind: llmApi,
+          provider_kind: targetCategory === 'local-llm' ? 'local' : llmApi,
           ...(authorizedBy && { authorized_by: authorizedBy }),
           ...(targetCategory === 'local-llm' && ollamaEndpoint && { endpoint: ollamaEndpoint }),
         })
@@ -244,31 +248,51 @@ export function Ops() {
                     </Select>
                   </div>
                   <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">Action</label>
+                    <Select value={scanAction} onValueChange={value => setScanAction(value as 'run' | 'probe')}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="run">Run campaign</SelectItem>
+                        <SelectItem value="probe">Probe surface</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
                     <label className="text-xs text-muted-foreground mb-1 block">Campaign Tag</label>
                     <Input placeholder="e.g. mar-24-v1" value={campaignTag} onChange={e => setCampaignTag(e.target.value)} />
                   </div>
-                  <div>
-                    <label className="text-xs text-muted-foreground mb-1 block">Max Steps</label>
-                    <Input type="number" placeholder="e.g. 20" value={maxSteps} onChange={e => setMaxSteps(e.target.value)} />
-                  </div>
+                  {scanAction === 'run' && (
+                    <div>
+                      <label className="text-xs text-muted-foreground mb-1 block">Max Steps</label>
+                      <Input type="number" placeholder="e.g. 20" value={maxSteps} onChange={e => setMaxSteps(e.target.value)} />
+                    </div>
+                  )}
                 </div>
                 <div className="flex gap-4 text-sm flex-wrap">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={loop} onChange={e => setLoop(e.target.checked)} className="rounded" />
-                    Loop continuously
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={autonomous} onChange={e => setAutonomous(e.target.checked)} className="rounded" />
-                    Autonomous
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={dryRun} onChange={e => setDryRun(e.target.checked)} className="rounded" />
-                    Dry Run
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer" title="Use short single-sentence prompts (better for CTFs with input length limits)">
-                    <input type="checkbox" checked={shortPrompt} onChange={e => setShortPrompt(e.target.checked)} className="rounded" />
-                    Short Prompts
-                  </label>
+                  {scanAction === 'run' && (
+                    <>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={loop} onChange={e => setLoop(e.target.checked)} className="rounded" />
+                        Loop continuously
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={dryRun} onChange={e => setDryRun(e.target.checked)} className="rounded" />
+                        Dry Run
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer" title="Use short single-sentence prompts (better for CTFs with input length limits)">
+                        <input type="checkbox" checked={shortPrompt} onChange={e => setShortPrompt(e.target.checked)} className="rounded" />
+                        Short Prompts
+                      </label>
+                    </>
+                  )}
+                  {scanAction === 'probe' && (
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={autonomous} onChange={e => setAutonomous(e.target.checked)} className="rounded" />
+                      Continue into the campaign after profiling
+                    </label>
+                  )}
                 </div>
                 <div>
                   <Button type="submit" disabled={launchScan.isPending}>
@@ -551,16 +575,24 @@ export function Ops() {
                 <div className="grid sm:grid-cols-2 gap-3">
                   <div>
                     <label className="text-xs text-muted-foreground mb-1 block">Provider *</label>
-                    <Input placeholder="openai / anthropic / …" value={apiProvider} onChange={e => setApiProvider(e.target.value)} />
+                    <Select value={apiProvider} onValueChange={setApiProvider}>
+                      <SelectTrigger><SelectValue placeholder="Select provider…" /></SelectTrigger>
+                      <SelectContent>
+                        {(data.api_config.providers ?? []).map(provider => (
+                          <SelectItem key={provider.key} value={provider.key}>{provider.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div>
                     <label className="text-xs text-muted-foreground mb-1 block">Bind Role</label>
                     <Select value={apiBind} onValueChange={setApiBind}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        {['attack', 'judge', 'planner'].map(r => (
-                          <SelectItem key={r} value={r}>{r}</SelectItem>
-                        ))}
+                        <SelectItem value="both">Judge and generator</SelectItem>
+                        <SelectItem value="generator">Generator (attack model)</SelectItem>
+                        <SelectItem value="judge">Judge</SelectItem>
+                        <SelectItem value="none">Store key only</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>

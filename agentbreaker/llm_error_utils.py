@@ -180,3 +180,20 @@ def describe_llm_exception(
         )
 
     return f"{role} call failed for {provider_label}/{model}: {raw}"
+
+
+def normalize_openai_base_url(endpoint: str | None) -> str | None:
+    """Return an OpenAI-SDK base URL.
+
+    The SDK appends ``/chat/completions`` itself. Endpoints copied from raw HTTP
+    examples often already include that path, which makes every request 404.
+    """
+    if endpoint is None:
+        return None
+    trimmed = str(endpoint).strip().rstrip("/")
+    if not trimmed:
+        return None
+    suffix = "/chat/completions"
+    if trimmed.endswith(suffix):
+        trimmed = trimmed[: -len(suffix)].rstrip("/")
+    return trimmed or None

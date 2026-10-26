@@ -20,7 +20,8 @@ from typing import Any
 
 import yaml
 
-from .llm_error_utils import api_key_mismatch_warning
+from . import ROOT
+from .llm_error_utils import api_key_mismatch_warning, normalize_openai_base_url
 
 
 # ---------------------------------------------------------------------------
@@ -209,11 +210,12 @@ def validate_config(config: dict, *, check_env: bool = False) -> list[ConfigErro
 # Platform detection
 # ---------------------------------------------------------------------------
 
-def load_platforms(platforms_path: Path = Path("platforms.yaml")) -> dict:
-    """Load the platforms.yaml registry."""
-    if not platforms_path.exists():
+def load_platforms(platforms_path: Path | None = None) -> dict:
+    """Load the platforms.yaml registry from the repo, not the process cwd."""
+    path = ROOT / "platforms.yaml" if platforms_path is None else Path(platforms_path)
+    if not path.exists():
         return {"platforms": [], "model_families": []}
-    with open(platforms_path) as f:
+    with open(path) as f:
         return yaml.safe_load(f) or {"platforms": [], "model_families": []}
 
 
@@ -225,7 +227,7 @@ class PlatformMatch:
     url_fields: dict        # extracted fields (e.g., {"level": "3"})
 
 
-def detect_platform(url: str, *, platforms_path: Path = Path("platforms.yaml")) -> PlatformMatch | None:
+def detect_platform(url: str, *, platforms_path: Path | None = None) -> PlatformMatch | None:
     """Match a URL against the platforms.yaml registry."""
     registry = load_platforms(platforms_path)
     for platform in registry.get("platforms", []):
@@ -254,7 +256,7 @@ class ModelFamilyMatch:
 
 
 def detect_model_family(
-    model: str, *, platforms_path: Path = Path("platforms.yaml")
+    model: str, *, platforms_path: Path | None = None
 ) -> ModelFamilyMatch | None:
     """Match a model name against the model families in platforms.yaml."""
     registry = load_platforms(platforms_path)
@@ -264,9 +266,56 @@ def detect_model_family(
             return ModelFamilyMatch(
                 api=family["api"],
                 api_key_env=family.get("api_key_env"),
-                endpoint=family.get("endpoint"),
+                endpoint=normalize_openai_base_url(family.get("endpoint")),
             )
     return None
+
+
+# Explicit provider choices from the control plane. These win over name
+# detection so a Groq-hosted Llama model is not saved as a local Ollama target.
+LLM_PROVIDER_PRESETS: dict[str, tuple[str, str | None, str | None]] = {
+    "openai": ("openai", "OPENAI_API_KEY", None),
+    "anthropic": ("anthropic", "ANTHROPIC_API_KEY", None),
+    "gemini": (
+        "openai-compatible",
+        "GOOGLE_API_KEY",
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+    ),
+    "google": (
+        "openai-compatible",
+        "GOOGLE_API_KEY",
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+    ),
+    "groq": ("openai-compatible", "GROQ_API_KEY", "https://api.groq.com/openai/v1"),
+    "local": ("openai-compatible", None, "http://localhost:11434/v1"),
+}
+
+
+def resolve_llm_family(
+    model: str,
+    provider_kind: str = "",
+    endpoint: str = "",
+) -> ModelFamilyMatch | None:
+    """Resolve an LLM target family from an explicit provider or the model name."""
+    kind = (provider_kind or "").strip().lower()
+    override = normalize_openai_base_url(endpoint)
+    if kind in LLM_PROVIDER_PRESETS:
+        api, api_key_env, default_endpoint = LLM_PROVIDER_PRESETS[kind]
+        return ModelFamilyMatch(
+            api=api,
+            api_key_env=api_key_env,
+            endpoint=override or default_endpoint,
+        )
+    family = detect_model_family(model)
+    if family is None:
+        return None
+    if override:
+        return ModelFamilyMatch(
+            api=family.api,
+            api_key_env=family.api_key_env,
+            endpoint=override,
+        )
+    return family
 
 
 # ---------------------------------------------------------------------------
@@ -397,8 +446,9 @@ def generate_llm_target(
     }
     if family.api_key_env:
         config["api_key_env"] = family.api_key_env
-    if family.endpoint:
-        config["endpoint"] = family.endpoint
+    endpoint = normalize_openai_base_url(family.endpoint)
+    if endpoint:
+        config["endpoint"] = endpoint
     if system_prompt:
         config["system_prompt"] = system_prompt
     config["max_tokens"] = 1024
@@ -433,9 +483,10 @@ def generate_llm_target(
 
 def append_target_to_config(
     target_entry: dict,
-    config_path: Path = Path("target_config.yaml"),
+    config_path: Path | None = None,
 ) -> None:
     """Append a target entry to the targets list in target_config.yaml."""
+    config_path = ROOT / "target_config.yaml" if config_path is None else Path(config_path)
     with open(config_path) as f:
         config = yaml.safe_load(f) or {}
 
@@ -457,9 +508,10 @@ def append_target_to_config(
 
 def remove_target_from_config(
     target_id: str,
-    config_path: Path = Path("target_config.yaml"),
+    config_path: Path | None = None,
 ) -> bool:
     """Remove a target entry from target_config.yaml. Returns True if found and removed."""
+    config_path = ROOT / "target_config.yaml" if config_path is None else Path(config_path)
     with open(config_path) as f:
         config = yaml.safe_load(f) or {}
 

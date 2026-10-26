@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentBreaker</title>
+  <style>
+    :root { color-scheme: dark; --bg:#101114; --card:#181a1f; --line:#2a2d34; --text:#f4f1ea; --muted:#a7a29a; --accent:#e8ff47; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:15px/1.5 ui-sans-serif, system-ui, sans-serif; background:var(--bg); color:var(--text); }
+    main { max-width:980px; margin:0 auto; padding:32px 20px 64px; }
+    h1 { font-size:32px; margin:0 0 6px; }
+    p { color:var(--muted); }
+    .stats, .targets { display:grid; gap:12px; }
+    .stats { grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); margin:24px 0; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+    .label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+    .value { font-size:24px; margin-top:4px; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--line); }
+    th { color:var(--muted); font-size:12px; font-weight:600; }
+    a { color:var(--accent); }
+    .error { color:#ffb4b4; }
+    code { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="label">AgentBreaker</p>
+    <h1>Control plane</h1>
+    <p>This is the built-in dashboard. The full React UI appears here after <code>cd frontend && npm install && npm run build</code>.</p>
+    <div id="stats" class="stats"></div>
+    <div class="card">
+      <div class="label">Targets</div>
+      <div id="targets"><p>Loading…</p></div>
+    </div>
+  </main>
+  <script>
+    const stats = document.getElementById('stats')
+    const targets = document.getElementById('targets')
+    function card(label, value) {
+      return '<div class="card"><div class="label">' + label + '</div><div class="value">' + value + '</div></div>'
+    }
+    function fail(message) {
+      targets.innerHTML = '<p class="error">' + message + '</p>'
+    }
+    Promise.all([
+      fetch('/api/overview').then(r => { if (!r.ok) throw new Error('overview ' + r.status); return r.json() }),
+      fetch('/api/ops').then(r => { if (!r.ok) throw new Error('ops ' + r.status); return r.json() }),
+    ]).then(([overview, ops]) => {
+      const s = overview.stats || {}
+      stats.innerHTML = [
+        card('Targets', overview.target_count ?? 0),
+        card('Attacks', s.total_attacks ?? 0),
+        card('Findings', s.total_success_findings ?? 0),
+        card('Active jobs', (ops.stats && ops.stats.active_jobs) || 0),
+      ].join('')
+      const rows = overview.targets || []
+      if (!rows.length) {
+        targets.innerHTML = '<p>No configured targets yet. Use <code>agentbreaker add-target</code> or the full UI.</p>'
+        return
+      }
+      targets.innerHTML = '<table><thead><tr><th>Target</th><th>Provider</th><th>Attacks</th><th>Peak</th></tr></thead><tbody>'
+        + rows.map(row => '<tr><td><a href="/api/targets/' + encodeURIComponent(row.target_id) + '">' + row.target_id + '</a></td><td>'
+          + (row.provider || '') + '</td><td>' + (row.attack_count || 0) + '</td><td>' + (row.peak_composite || 0) + '</td></tr>').join('')
+        + '</tbody></table>'
+    }).catch(err => fail(err.message || 'Failed to load the control plane.'))
+  </script>
+</body>
+</html>
