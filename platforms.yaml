@@ -104,4 +104,4 @@ model_families:
   - pattern: "^(llama|mistral|phi-|qwen|deepseek)"
     api: openai-compatible
     api_key_env: null
-    endpoint: "http://localhost:11434/v1/chat/completions"
+    endpoint: "http://localhost:11434/v1"

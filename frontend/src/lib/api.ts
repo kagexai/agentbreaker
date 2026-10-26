@@ -68,6 +68,70 @@ export interface OverviewPayload {
   stats: OverviewStats
 }
 
+export interface WorkspaceEngine {
+  role: string
+  provider_id: string | null
+  api: string
+  model: string
+  api_key_env: string | null
+  endpoint: string | null
+  api_key_required: boolean
+  api_key_present: boolean
+  ready: boolean
+  reasons: string[]
+}
+
+export interface WorkspaceTarget {
+  target_id: string
+  provider: string
+  model: string | null
+  tags: string[]
+  capabilities: Record<string, unknown>
+  status: 'tested' | 'findings' | 'configured' | string
+  tested: boolean
+  attack_count: number
+  peak_composite: number
+  findings: { success: number; partial: number; novel: number }
+  top_categories: string[]
+  top_owasp_refs: string[]
+}
+
+export interface WorkspaceAction {
+  id: string
+  title: string
+  detail: string
+  href: string
+}
+
+export interface WorkspacePayload {
+  generated_at: string
+  ready: boolean
+  headline: string
+  blocking: string[]
+  next_actions: WorkspaceAction[]
+  engines: {
+    judge: WorkspaceEngine
+    generator: WorkspaceEngine
+    planner: { use_judge_config: boolean }
+  }
+  counts: {
+    configured: number
+    tested: number
+    with_findings: number
+    untested: number
+    success_findings: number
+    partial_findings: number
+    novel_findings: number
+    attacks: number
+  }
+  targets: WorkspaceTarget[]
+  frameworks: {
+    owasp: { ref: string; target_count: number }[]
+    categories: { id: string; finding_count: number }[]
+  }
+  orphans: { target_id: string; findings: Record<string, number> }[]
+}
+
 export interface CoverageRow {
   target_id: string
   category: string
@@ -163,10 +227,11 @@ export interface OpsTarget {
 
 export interface OpsEngineState {
   role: string
+  provider_id?: string | null
   api: string
   model: string
-  api_key_env?: string
-  endpoint?: string
+  api_key_env?: string | null
+  endpoint?: string | null
   configured: boolean
   api_key_present: boolean
   api_key_masked: string
@@ -177,8 +242,11 @@ export interface OpsProviderPreset {
   label: string
   default_model: string
   api: string
-  api_key_env: string
-  endpoint?: string
+  api_key_env?: string | null
+  endpoint?: string | null
+  models?: string[]
+  aliases?: string[]
+  builtin?: boolean
 }
 
 export interface OpsApiConfig {

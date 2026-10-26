@@ -18,9 +18,9 @@ export function SectionBlock({ id, kicker, title, description, children, classNa
     >
       <div>
         {kicker && (
-          <p className="text-xs uppercase tracking-widest text-muted-foreground mb-1">{kicker}</p>
+          <p className="kagex-label kagex-kicker text-muted-foreground mb-2">{kicker}</p>
         )}
-        <h2 className="text-2xl font-bold">{title}</h2>
+        <h2 className="text-[1.45rem] font-bold tracking-[-0.03em]">{title}</h2>
         {description && (
           <p className="mt-1.5 text-sm text-muted-foreground max-w-3xl">{description}</p>
         )}

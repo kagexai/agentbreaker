@@ -4,6 +4,7 @@ import {
   getJson,
   postJson,
   type OverviewPayload,
+  type WorkspacePayload,
   type CoveragePayload,
   type AtlasPayload,
   type OwaspPayload,
@@ -25,6 +26,13 @@ export function useOverview() {
   return useQuery({
     queryKey: ['overview'],
     queryFn: () => getJson<OverviewPayload>('/api/overview'),
+  })
+}
+
+export function useWorkspace() {
+  return useQuery({
+    queryKey: ['workspace'],
+    queryFn: () => getJson<WorkspacePayload>('/api/workspace'),
   })
 }
 
@@ -161,6 +169,15 @@ export function useAddApi() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (payload: Record<string, unknown>) => postJson('/api/ops/add-api', payload),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ops'] }),
+  })
+}
+
+export function useSwitchModel() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: { role: string; provider: string; model?: string }) =>
+      postJson('/api/ops/model', payload),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['ops'] }),
   })
 }

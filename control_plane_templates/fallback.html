@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentBreaker · KageX</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <style>
+    :root { color-scheme: dark; --bg:oklch(0.12 0 0); --card:oklch(0.16 0 0); --line:oklch(1 0 0 / 10%); --text:oklch(0.985 0 0); --muted:oklch(0.6 0 0); --accent:oklch(0.752 0.137 196); --brand:#fb2c36; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:15px/1.5 Inter, "Segoe UI", system-ui, sans-serif; background:var(--bg); color:var(--text); }
+    main { max-width:80rem; margin:0 auto; padding:32px 2rem 64px; }
+    .brand { display:flex; align-items:center; gap:10px; margin-bottom:18px; }
+    .brand img { width:32px; height:32px; }
+    .brand strong { font-weight:800; letter-spacing:-0.04em; }
+    .label { color:var(--muted); font:400 0.74rem/1 "JetBrains Mono", ui-monospace, monospace; text-transform:uppercase; letter-spacing:0.1em; }
+    h1 { font-size:clamp(2rem, 4vw, 3.2rem); font-weight:800; letter-spacing:-0.05em; margin:6px 0; }
+    p { color:var(--muted); }
+    .stats, .targets { display:grid; gap:12px; }
+    .stats { grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); margin:24px 0; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:0.75rem; padding:14px 16px; }
+    .value { font-size:1.7rem; font-weight:800; letter-spacing:-0.04em; margin-top:4px; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--line); }
+    th { color:var(--muted); font-size:12px; font-weight:600; }
+    a { color:var(--accent); }
+    .error { color:oklch(0.577 0.245 27.325); }
+    code { font-family:"JetBrains Mono", ui-monospace, monospace; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand"><img src="/logoW.svg" alt="" /><strong>KageX</strong></div>
+    <p class="label">AgentBreaker_</p>
+    <h1>Control plane</h1>
+    <p>This is the built-in dashboard. The full React UI appears here after <code>cd frontend && npm install && npm run build</code>.</p>
+    <div id="stats" class="stats"></div>
+    <div class="card">
+      <div class="label">Targets</div>
+      <div id="targets"><p>Loading…</p></div>
+    </div>
+  </main>
+  <script>
+    const stats = document.getElementById('stats')
+    const targets = document.getElementById('targets')
+    function card(label, value) {
+      return '<div class="card"><div class="label">' + label + '</div><div class="value">' + value + '</div></div>'
+    }
+    function fail(message) {
+      targets.innerHTML = '<p class="error">' + message + '</p>'
+    }
+    function esc(value) {
+      return String(value ?? '').replace(/[&<>"']/g, function (ch) {
+        return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]
+      })
+    }
+    fetch('/api/workspace').then(r => { if (!r.ok) throw new Error('workspace ' + r.status); return r.json() })
+      .then((workspace) => {
+      const counts = workspace.counts || {}
+      const judge = (workspace.engines && workspace.engines.judge) || {}
+      stats.innerHTML = [
+        card('Configured', counts.configured ?? 0),
+        card('Findings', counts.success_findings ?? 0),
+        card('Campaign attacks', counts.attacks ?? 0),
+        card('Judge', judge.ready ? 'ready' : 'blocked'),
+      ].join('')
+      const rows = workspace.targets || []
+      const headline = '<p>' + esc(workspace.headline || '') + '</p>'
+      if (!rows.length) {
+        targets.innerHTML = headline + '<p>No configured targets yet. Use <code>agentbreaker add-target</code> or the full UI.</p>'
+        return
+      }
+      targets.innerHTML = headline + '<table><thead><tr><th>Target</th><th>Status</th><th>Findings</th><th>Attacks</th></tr></thead><tbody>'
+        + rows.map(row => '<tr><td><a href="/api/targets/' + encodeURIComponent(row.target_id) + '">' + esc(row.target_id) + '</a></td><td>'
+          + esc(row.status) + '</td><td>' + esc((row.findings && row.findings.success) || 0) + '</td><td>' + esc(row.attack_count || 0) + '</td></tr>').join('')
+        + '</tbody></table>'
+    }).catch(err => fail(err.message || 'Failed to load the control plane.'))
+  </script>
+</body>
+</html>

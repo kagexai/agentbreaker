@@ -1,80 +1,115 @@
 @import "tailwindcss";
 
 @theme inline {
-  --color-background: hsl(var(--background));
-  --color-foreground: hsl(var(--foreground));
-  --color-card: hsl(var(--card));
-  --color-card-foreground: hsl(var(--card-foreground));
-  --color-popover: hsl(var(--popover));
-  --color-popover-foreground: hsl(var(--popover-foreground));
-  --color-primary: hsl(var(--primary));
-  --color-primary-foreground: hsl(var(--primary-foreground));
-  --color-secondary: hsl(var(--secondary));
-  --color-secondary-foreground: hsl(var(--secondary-foreground));
-  --color-muted: hsl(var(--muted));
-  --color-muted-foreground: hsl(var(--muted-foreground));
-  --color-accent: hsl(var(--accent));
-  --color-accent-foreground: hsl(var(--accent-foreground));
-  --color-destructive: hsl(var(--destructive));
-  --color-border: hsl(var(--border));
-  --color-input: hsl(var(--input));
-  --color-ring: hsl(var(--ring));
+  --font-sans: "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", SFMono-Regular, ui-monospace, monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
   --radius: 0.625rem;
 }
 
+/* KageX brand tokens. Dark is the default; light is [data-theme="light"].
+   Values are the OKLCH palette from the Design & Brand Guidelines. */
 :root {
-  --background: 40 33% 93%;
-  --foreground: 210 27% 12%;
-  --card: 40 33% 99%;
-  --card-foreground: 210 27% 12%;
-  --popover: 40 33% 99%;
-  --popover-foreground: 210 27% 12%;
-  --primary: 172 82% 23%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 36 42% 37%;
-  --secondary-foreground: 0 0% 100%;
-  --muted: 40 10% 88%;
-  --muted-foreground: 200 12% 42%;
-  --accent: 172 82% 23%;
-  --accent-foreground: 0 0% 100%;
-  --destructive: 16 73% 33%;
-  --border: 210 14% 89%;
-  --input: 210 14% 89%;
-  --ring: 172 82% 23%;
+  color-scheme: dark;
+  --background: oklch(0.12 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.16 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.16 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.637 0.237 25.331);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.81 0.16 78);
+  --secondary-foreground: oklch(0.15 0 0);
+  --muted: oklch(0.21 0 0);
+  --muted-foreground: oklch(0.6 0 0);
+  --accent: oklch(0.752 0.137 196);
+  --accent-foreground: oklch(0.15 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+  --success: oklch(0.79 0.18 149);
+  --warning: oklch(0.81 0.16 78);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 10%);
+  --ring: oklch(0.637 0.237 25.331);
 }
 
-.dark {
-  --background: 217 26% 11%;
-  --foreground: 38 14% 89%;
-  --card: 217 26% 14%;
-  --card-foreground: 38 14% 89%;
-  --popover: 217 26% 14%;
-  --popover-foreground: 38 14% 89%;
-  --primary: 174 59% 59%;
-  --primary-foreground: 217 26% 11%;
-  --secondary: 38 90% 50%;
-  --secondary-foreground: 217 26% 11%;
-  --muted: 217 20% 20%;
-  --muted-foreground: 210 8% 60%;
-  --accent: 174 59% 59%;
-  --accent-foreground: 217 26% 11%;
-  --destructive: 0 72% 60%;
-  --border: 217 20% 22%;
-  --input: 217 20% 22%;
-  --ring: 174 59% 59%;
+[data-theme="light"] {
+  color-scheme: light;
+  --background: oklch(0.985 0 0);
+  --foreground: oklch(0.15 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.15 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.15 0 0);
+  --muted: oklch(0.94 0 0);
+  --muted-foreground: oklch(0.45 0 0);
+  --border: oklch(0 0 0 / 12%);
+  --input: oklch(0 0 0 / 12%);
 }
 
 * {
-  border-color: hsl(var(--border));
+  border-color: var(--border);
   box-sizing: border-box;
+}
+
+html {
+  background: var(--background);
+  color: var(--foreground);
+  transition: background-color 200ms, color 200ms;
 }
 
 body {
   margin: 0;
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font-family: "Avenir Next", "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+}
+
+.kagex-label {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.kagex-kicker::after {
+  content: "_";
+  margin-left: 0.08em;
+  animation: kagex-blink 1s steps(1) infinite;
+}
+
+.kagex-title {
+  font-size: clamp(2rem, 4vw, 3.2rem);
+  font-weight: 800;
+  letter-spacing: -0.05em;
+  line-height: 1.05;
+}
+
+@keyframes kagex-blink {
+  50% { opacity: 0; }
 }
 
 @keyframes travel {
@@ -87,20 +122,26 @@ body {
   animation: travel 1.5s linear infinite;
 }
 
-/* Live panel border glow — Improvement #6 */
 @keyframes live-glow {
-  0%, 100% { box-shadow: 0 0 0 0 hsl(var(--primary) / 0); }
-  50%      { box-shadow: 0 0 12px 2px hsl(var(--primary) / 0.15); }
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50%      { box-shadow: 0 0 12px 2px color-mix(in oklch, var(--primary) 15%, transparent); }
 }
 .live-glow {
   animation: live-glow 3s ease-in-out infinite;
 }
 
-/* Breach banner slide-in — Improvement #7 */
 @keyframes breach-in {
   0%   { opacity: 0; transform: translateY(-8px); }
   100% { opacity: 1; transform: translateY(0); }
 }
 .animate-breach-in {
   animation: breach-in 0.3s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { transition: none; }
+  .kagex-kicker::after,
+  .animate-travel,
+  .live-glow,
+  .animate-breach-in { animation: none; }
 }

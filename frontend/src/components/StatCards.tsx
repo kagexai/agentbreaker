@@ -18,8 +18,8 @@ export function StatCards({ cards, className }: StatCardsProps) {
       {cards.map((card, i) => (
         <Card key={i} className="py-0">
           <CardContent className="p-4">
-            <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">{card.label}</div>
-            <div className="text-2xl font-bold text-foreground">{card.value}</div>
+            <div className="kagex-label text-muted-foreground mb-1">{card.label}</div>
+            <div className="text-[1.7rem] font-extrabold tracking-[-0.04em] text-foreground">{card.value}</div>
             {card.meta && <div className="text-xs text-muted-foreground mt-1">{card.meta}</div>}
           </CardContent>
         </Card>

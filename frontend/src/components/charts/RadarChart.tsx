@@ -25,18 +25,18 @@ export function RadarChart({ data, color = '#0f766e', height = 300 }: RadarChart
   return (
     <ResponsiveContainer width="100%" height={height}>
       <RechartsRadar data={data} margin={{ top: 8, right: 24, bottom: 8, left: 24 }}>
-        <PolarGrid stroke="hsl(var(--border))" />
+        <PolarGrid stroke="var(--border)" />
         <PolarAngleAxis
           dataKey="category"
-          tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+          tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
         />
         <Tooltip
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
         formatter={(v: any) => [Number(v).toFixed(2), 'Composite']}
           contentStyle={{
             fontSize: 12,
-            background: 'hsl(var(--card))',
-            border: '1px solid hsl(var(--border))',
+            background: 'var(--card)',
+            border: '1px solid var(--border)',
             borderRadius: 6,
           }}
         />

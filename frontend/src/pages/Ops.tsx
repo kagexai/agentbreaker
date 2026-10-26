@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useOps, useLaunchScan, useAddTarget, useRemoveTarget, useStopJob, useAddApi } from '@/hooks/useApi'
+import { useEffect, useState } from 'react'
+import { useOps, useLaunchScan, useAddTarget, useRemoveTarget, useStopJob, useAddApi, useSwitchModel } from '@/hooks/useApi'
 import { LiveAttackPanel } from '@/components/LiveAttackPanel'
 import { StatCards } from '@/components/StatCards'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -11,12 +11,80 @@ import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from 'sonner'
+import type { OpsProviderPreset } from '@/lib/api'
+
+function EngineModelSwitch({
+  role,
+  plugins,
+  providerId,
+  model,
+}: {
+  role: string
+  plugins: OpsProviderPreset[]
+  providerId?: string | null
+  model: string
+}) {
+  const switchModel = useSwitchModel()
+  const [provider, setProvider] = useState(providerId || plugins[0]?.key || 'openai')
+  const [chosen, setChosen] = useState(model)
+  const plugin = plugins.find(item => item.key === provider)
+  const models = plugin?.models ?? []
+  const pluginKey = plugins.map(item => item.key).join('|')
+
+  useEffect(() => {
+    setProvider(providerId || plugins[0]?.key || 'openai')
+    setChosen(model)
+  }, [providerId, model, pluginKey, plugins])
+
+  function onProvider(next: string) {
+    const nextPlugin = plugins.find(item => item.key === next)
+    setProvider(next)
+    setChosen(nextPlugin?.default_model || '')
+  }
+
+  async function apply(event: React.FormEvent) {
+    event.preventDefault()
+    try {
+      await switchModel.mutateAsync({ role, provider, model: chosen })
+      toast.success(`Switched ${role} to ${chosen || plugin?.default_model}`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Model switch failed')
+    }
+  }
+
+  return (
+    <form onSubmit={apply} className="grid gap-2 pt-1">
+      <Select value={provider} onValueChange={onProvider}>
+        <SelectTrigger><SelectValue placeholder="Provider" /></SelectTrigger>
+        <SelectContent>
+          {plugins.map(item => (
+            <SelectItem key={item.key} value={item.key}>{item.label}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {models.length > 0 && (
+        <Select value={models.includes(chosen) ? chosen : models[0]} onValueChange={setChosen}>
+          <SelectTrigger><SelectValue placeholder="Builtin model" /></SelectTrigger>
+          <SelectContent>
+            {models.map(item => (
+              <SelectItem key={item} value={item}>{item}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+      <Input value={chosen} onChange={event => setChosen(event.target.value)} placeholder="Model id" />
+      <Button type="submit" size="sm" variant="outline" disabled={switchModel.isPending}>
+        {switchModel.isPending ? 'Switching…' : 'Use this model'}
+      </Button>
+    </form>
+  )
+}
 
 function StatusBadge({ status }: { status: string }) {
   const s = status?.toLowerCase()
   const cls = s === 'running' ? 'bg-primary/15 text-primary'
-    : s === 'done' || s === 'finished' ? 'bg-muted text-muted-foreground'
-    : s === 'failed' || s === 'error' ? 'bg-destructive/15 text-destructive'
+    : s === 'completed' || s === 'stopped' ? 'bg-muted text-muted-foreground'
+    : s === 'failed' || s === 'interrupted' || s === 'error' ? 'bg-destructive/15 text-destructive'
     : 'bg-secondary/15 text-secondary'
   return <Badge className={`text-xs ${cls}`}>{status}</Badge>
 }
@@ -31,6 +99,7 @@ export function Ops() {
 
   // Scan form state
   const [scanTarget, setScanTarget] = useState('')
+  const [scanAction, setScanAction] = useState<'run' | 'probe'>('run')
   const [campaignTag, setCampaignTag] = useState('')
   const [maxSteps, setMaxSteps] = useState('')
   const [loop, setLoop] = useState(true)
@@ -57,20 +126,25 @@ export function Ops() {
   const isHttpCategory = targetCategory === 'http-api' || targetCategory === 'ctf'
 
   // Add API form state
-  const [apiProvider, setApiProvider] = useState('')
+  const [apiProvider, setApiProvider] = useState('openai')
   const [apiKey, setApiKey] = useState('')
   const [apiEndpoint, setApiEndpoint] = useState('')
-  const [apiBind, setApiBind] = useState('attack')
+  const [apiBind, setApiBind] = useState('both')
 
   if (isLoading) return <div className="grid gap-4"><Skeleton className="h-24" /><Skeleton className="h-64" /></div>
   if (error) return <p className="text-destructive">Failed to load: {error.message}</p>
   if (!data) return null
 
+  const providers = data.api_config.providers ?? []
+  const engines = [data.api_config.judge, data.api_config.generator].filter(
+    (engine): engine is NonNullable<typeof engine> => Boolean(engine)
+  )
+  const readyEngines = engines.filter(engine => engine.configured && engine.api_key_present).length
   const cards = [
     { label: 'Targets', value: data.targets.length },
     { label: 'Active Jobs', value: data.jobs.filter(j => j.status === 'running').length },
     { label: 'Total Jobs', value: data.jobs.length },
-    { label: 'APIs Configured', value: Object.keys(data.api_config).length },
+    { label: 'APIs Ready', value: `${readyEngines} / ${engines.length}` },
   ]
 
   async function handleScan(e: React.FormEvent) {
@@ -82,13 +156,12 @@ export function Ops() {
     }
     try {
       await launchScan.mutateAsync({
+        action: scanAction,
         target_id: scanTarget,
         ...(campaignTag && { campaign_tag: campaignTag }),
-        ...(maxSteps && { max_steps: Math.min(1000, Math.max(1, parseInt(maxSteps))) }),
-        loop,
-        autonomous,
-        dry_run: dryRun,
-        short_prompt: shortPrompt,
+        ...(scanAction === 'run' && maxSteps && { max_steps: Math.min(1000, Math.max(1, parseInt(maxSteps))) }),
+        ...(scanAction === 'run' && { loop, dry_run: dryRun, short_prompt: shortPrompt }),
+        ...(scanAction === 'probe' && { autonomous }),
       })
       toast.success(`Scan launched for ${scanTarget}`)
       await refetch()
@@ -114,13 +187,20 @@ export function Ops() {
     }
     try {
       if (isLlmCategory) {
-        if (!newTargetModel) return toast.error('Model name is required')
+        const cloudProviders = providers.filter(
+          item => item.key !== 'local' && item.key !== 'custom',
+        )
+        const selectedCloud = cloudProviders.find(item => item.key === llmApi)
+        const modelName = targetCategory === 'cloud-llm'
+          ? (newTargetModel.trim() || selectedCloud?.default_model || '')
+          : newTargetModel.trim()
+        if (!modelName) return toast.error('Model name is required')
         await addTarget.mutateAsync({
           input_kind: 'model',
-          model: newTargetModel,
+          model: modelName,
           ...(systemPrompt && { system_prompt: systemPrompt }),
           ...(newTargetId && { target_id: newTargetId }),
-          provider_kind: llmApi,
+          provider_kind: targetCategory === 'local-llm' ? 'local' : (selectedCloud?.key || llmApi),
           ...(authorizedBy && { authorized_by: authorizedBy }),
           ...(targetCategory === 'local-llm' && ollamaEndpoint && { endpoint: ollamaEndpoint }),
         })
@@ -209,8 +289,8 @@ export function Ops() {
   return (
     <div className="grid gap-8">
       <div>
-        <p className="text-xs uppercase tracking-widest text-muted-foreground mb-1">Operations</p>
-        <h1 className="text-3xl font-bold mb-1">Control Plane Operations</h1>
+        <p className="kagex-label kagex-kicker text-muted-foreground mb-2">Operations</p>
+        <h1 className="kagex-title mb-2">Control Plane Operations</h1>
         <p className="text-muted-foreground text-sm">Launch scans, manage targets, configure API providers, and monitor jobs.</p>
       </div>
 
@@ -244,31 +324,51 @@ export function Ops() {
                     </Select>
                   </div>
                   <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">Action</label>
+                    <Select value={scanAction} onValueChange={value => setScanAction(value as 'run' | 'probe')}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="run">Run campaign</SelectItem>
+                        <SelectItem value="probe">Probe surface</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
                     <label className="text-xs text-muted-foreground mb-1 block">Campaign Tag</label>
                     <Input placeholder="e.g. mar-24-v1" value={campaignTag} onChange={e => setCampaignTag(e.target.value)} />
                   </div>
-                  <div>
-                    <label className="text-xs text-muted-foreground mb-1 block">Max Steps</label>
-                    <Input type="number" placeholder="e.g. 20" value={maxSteps} onChange={e => setMaxSteps(e.target.value)} />
-                  </div>
+                  {scanAction === 'run' && (
+                    <div>
+                      <label className="text-xs text-muted-foreground mb-1 block">Max Steps</label>
+                      <Input type="number" placeholder="e.g. 20" value={maxSteps} onChange={e => setMaxSteps(e.target.value)} />
+                    </div>
+                  )}
                 </div>
                 <div className="flex gap-4 text-sm flex-wrap">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={loop} onChange={e => setLoop(e.target.checked)} className="rounded" />
-                    Loop continuously
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={autonomous} onChange={e => setAutonomous(e.target.checked)} className="rounded" />
-                    Autonomous
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={dryRun} onChange={e => setDryRun(e.target.checked)} className="rounded" />
-                    Dry Run
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer" title="Use short single-sentence prompts (better for CTFs with input length limits)">
-                    <input type="checkbox" checked={shortPrompt} onChange={e => setShortPrompt(e.target.checked)} className="rounded" />
-                    Short Prompts
-                  </label>
+                  {scanAction === 'run' && (
+                    <>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={loop} onChange={e => setLoop(e.target.checked)} className="rounded" />
+                        Loop continuously
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={dryRun} onChange={e => setDryRun(e.target.checked)} className="rounded" />
+                        Dry Run
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer" title="Use short single-sentence prompts (better for CTFs with input length limits)">
+                        <input type="checkbox" checked={shortPrompt} onChange={e => setShortPrompt(e.target.checked)} className="rounded" />
+                        Short Prompts
+                      </label>
+                    </>
+                  )}
+                  {scanAction === 'probe' && (
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={autonomous} onChange={e => setAutonomous(e.target.checked)} className="rounded" />
+                      Continue into the campaign after profiling
+                    </label>
+                  )}
                 </div>
                 <div>
                   <Button type="submit" disabled={launchScan.isPending}>
@@ -334,7 +434,7 @@ export function Ops() {
                   <label className="text-xs text-muted-foreground mb-2 block">Target Type</label>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     {([
-                      { id: 'cloud-llm', label: 'Cloud LLM', desc: 'OpenAI, Anthropic, Gemini, Grok', icon: '🌐' },
+                      { id: 'cloud-llm', label: 'Cloud LLM', desc: 'OpenRouter, OpenAI, Anthropic, Gemini', icon: '🌐' },
                       { id: 'local-llm', label: 'Local LLM', desc: 'Ollama, LM Studio, vLLM', icon: '🖥' },
                       { id: 'http-api', label: 'HTTP API', desc: 'Custom chatbot endpoint', icon: '🔗' },
                       { id: 'ctf', label: 'CTF / Lab', desc: 'PromptTrace, Resistance, etc.', icon: '🏴' },
@@ -358,30 +458,54 @@ export function Ops() {
                 </div>
 
                 {/* Cloud LLM fields */}
-                {targetCategory === 'cloud-llm' && (
+                {targetCategory === 'cloud-llm' && (() => {
+                  const cloudProviders = providers.filter(
+                    item => item.key !== 'local' && item.key !== 'custom',
+                  )
+                  const selectedCloud = cloudProviders.find(item => item.key === llmApi) ?? cloudProviders[0]
+                  const cloudModels = selectedCloud?.models ?? []
+                  const shownModel = newTargetModel || selectedCloud?.default_model || ''
+                  return (
                   <div className="grid sm:grid-cols-2 gap-3">
                     <div>
                       <label className="text-xs text-muted-foreground mb-1 block">API Provider</label>
-                      <Select value={llmApi} onValueChange={setLlmApi}>
+                      <Select value={selectedCloud?.key || llmApi} onValueChange={next => {
+                        const plugin = cloudProviders.find(item => item.key === next)
+                        setLlmApi(next)
+                        setNewTargetModel(plugin?.default_model || '')
+                      }}>
                         <SelectTrigger><SelectValue /></SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="openai">OpenAI (GPT-4o, o3, o4-mini, …)</SelectItem>
-                          <SelectItem value="anthropic">Anthropic (Claude Opus, Sonnet, Haiku)</SelectItem>
-                          <SelectItem value="gemini">Google (Gemini Pro, Flash)</SelectItem>
-                          <SelectItem value="groq">Groq (Llama, Mixtral)</SelectItem>
+                          {cloudProviders.map(item => (
+                            <SelectItem key={item.key} value={item.key}>{item.label}</SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                     </div>
-                    <div>
+                    <div className="grid gap-2">
                       <label className="text-xs text-muted-foreground mb-1 block">Model *</label>
+                      {cloudModels.length > 0 && (
+                        <Select
+                          value={cloudModels.includes(shownModel) ? shownModel : cloudModels[0]}
+                          onValueChange={setNewTargetModel}
+                        >
+                          <SelectTrigger><SelectValue placeholder="Builtin model" /></SelectTrigger>
+                          <SelectContent>
+                            {cloudModels.map(item => (
+                              <SelectItem key={item} value={item}>{item}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
                       <Input
-                        placeholder={llmApi === 'anthropic' ? 'claude-sonnet-4-20250514' : llmApi === 'gemini' ? 'gemini-2.5-pro' : 'gpt-4o'}
-                        value={newTargetModel}
+                        placeholder={selectedCloud?.default_model || 'model id'}
+                        value={shownModel}
                         onChange={e => setNewTargetModel(e.target.value)}
                       />
                     </div>
                   </div>
-                )}
+                  )
+                })()}
 
                 {/* Local LLM fields */}
                 {targetCategory === 'local-llm' && (
@@ -551,16 +675,24 @@ export function Ops() {
                 <div className="grid sm:grid-cols-2 gap-3">
                   <div>
                     <label className="text-xs text-muted-foreground mb-1 block">Provider *</label>
-                    <Input placeholder="openai / anthropic / …" value={apiProvider} onChange={e => setApiProvider(e.target.value)} />
+                    <Select value={apiProvider} onValueChange={setApiProvider}>
+                      <SelectTrigger><SelectValue placeholder="Select provider…" /></SelectTrigger>
+                      <SelectContent>
+                        {(data.api_config.providers ?? []).map(provider => (
+                          <SelectItem key={provider.key} value={provider.key}>{provider.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div>
                     <label className="text-xs text-muted-foreground mb-1 block">Bind Role</label>
                     <Select value={apiBind} onValueChange={setApiBind}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        {['attack', 'judge', 'planner'].map(r => (
-                          <SelectItem key={r} value={r}>{r}</SelectItem>
-                        ))}
+                        <SelectItem value="both">Judge and generator</SelectItem>
+                        <SelectItem value="generator">Generator (attack model)</SelectItem>
+                        <SelectItem value="judge">Judge</SelectItem>
+                        <SelectItem value="none">Store key only</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -621,6 +753,12 @@ export function Ops() {
                           {e.endpoint && (
                             <p className="text-[10px] font-mono text-muted-foreground/50 truncate">{e.endpoint}</p>
                           )}
+                          <EngineModelSwitch
+                            role={e.role}
+                            plugins={data.api_config.providers ?? []}
+                            providerId={e.provider_id}
+                            model={e.model}
+                          />
                         </div>
                       ) : (
                         <p className="text-xs text-muted-foreground">Not configured — set up via the form above or <code className="text-[10px]">.env</code> file.</p>
@@ -649,7 +787,7 @@ export function Ops() {
               {/* Available provider presets */}
               {(data.api_config.providers?.length ?? 0) > 0 && (
                 <div>
-                  <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2.5">Available Providers</p>
+                  <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2.5">Builtin providers</p>
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
                     {data.api_config.providers!.map(p => (
                       <div key={p.key} className="rounded-md border border-border px-3 py-2 text-center hover:border-primary/30 transition-colors">

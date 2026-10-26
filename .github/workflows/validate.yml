@@ -1,0 +1,36 @@
+name: Validate AgentBreaker
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install
+        run: |
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Compile-check Python
+        run: python -m compileall -q agentbreaker agentbreaker.py control_plane.py metadata_index.py
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Validate config
+        run: python -m agentbreaker validate
